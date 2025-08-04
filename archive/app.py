@@ -800,7 +800,7 @@ def fetch_northbeam_data(date_from=None, date_to=None):
 def fetch_all_data_sequentially(date_from=None, date_to=None):
     """
     Fetch all required data sequentially and return comprehensive ad objects.
-    Process: Always fetch fresh data → Save to S3 → Merge into comprehensive objects → Save to S3
+    Process: Fetch Meta data → Save → Fetch Northbeam data → Save → Merge into comprehensive objects
     """
     
     print(f"🚀 COMPREHENSIVE AD METRICS EXTRACTION")
@@ -813,8 +813,12 @@ def fetch_all_data_sequentially(date_from=None, date_to=None):
     use_northbeam = getattr(globals(), 'USE_NORTHBEAM_DATA', True)
     print(f"   - Data Source: {'Northbeam' if use_northbeam else 'Meta'}")
     
-    print(f"\n🔍 STEP 1: CHECKING EXISTING RAW DATA FILES...")
+    print(f"\n🔍 STEP 1: CHECKING EXISTING DATA FILES...")
     
+    # Always fetch fresh data for new date ranges
+    # print(f"🔄 Fetching fresh data for date range: {date_from} to {date_to}")
+    
+    # Check for existing data files
     # Safety check for date_from and date_to
     if date_from is None or date_to is None:
         raise ValueError("date_from and date_to must be provided")
@@ -822,7 +826,6 @@ def fetch_all_data_sequentially(date_from=None, date_to=None):
     date_from_formatted = format_date_for_filename(date_from)
     date_to_formatted = format_date_for_filename(date_to)
     
-    # Check for existing raw data files
     meta_insights_file = f"campaign-reporting/raw/meta_insights/meta_insights_{date_from_formatted}-{date_to_formatted}.json"
     northbeam_file = f"campaign-reporting/raw/northbeam/northbeam_{date_from_formatted}-{date_to_formatted}.csv"
     
@@ -2650,10 +2653,6 @@ def display_summary_tab(ad_objects, top_n=DEFAULT_TOP_N):
     st.header("📊 Campaign Summary")
     
     # Debug: Print the current USE_NORTHBEAM_DATA setting
-    print(f"DEBUG: display_summary_tab called with {len(ad_objects) if ad_objects else 0} ads")
-    print(f"DEBUG: ad_objects type: {type(ad_objects)}")
-    if ad_objects:
-        print(f"DEBUG: ad_objects keys sample: {list(ad_objects.keys())[:3] if isinstance(ad_objects, dict) else 'Not a dict'}")
 
     use_northbeam = getattr(main, 'USE_NORTHBEAM_DATA', True)
     
@@ -2687,17 +2686,7 @@ def display_summary_tab(ad_objects, top_n=DEFAULT_TOP_N):
     
     # Create ads dataframe
     ads_data = []
-    
-    # Handle both dict and list formats
-    if isinstance(ad_objects, dict):
-        # Convert dict to list of ad objects
-        ad_list = list(ad_objects.values())
-    else:
-        ad_list = ad_objects
-    
-    print(f"DEBUG: Processing {len(ad_list)} ads for display")
-    
-    for ad in ad_list:
+    for ad in ad_objects:
         # Get ad URL from processed data
         ad_id = ad['ad_ids'].get('ad_id')
         ad_type = ad['metadata'].get('ad_type')  # Use existing ad_type from comprehensive ad object
@@ -3783,6 +3772,11 @@ def main():
     
 
     
+    # Simple status display
+    if st.session_state.comprehensive_ads and st.session_state.report_config:
+        st.sidebar.markdown("---")
+        st.sidebar.success("✅ Report ready! Explore the tabs below.")
+    
 
 
     # Main content area
@@ -3876,12 +3870,6 @@ def main():
                         'date_from_formatted': date_from_formatted,
                         'date_to_formatted': date_to_formatted
                     }
-                    
-                    # Debug logging
-                    print(f"DEBUG: Stored {len(comprehensive_ads)} ads in session state")
-                    print(f"DEBUG: Session state comprehensive_ads type: {type(st.session_state.comprehensive_ads)}")
-                    if comprehensive_ads:
-                        print(f"DEBUG: First ad sample: {comprehensive_ads[:3] if isinstance(comprehensive_ads, list) else list(comprehensive_ads.keys())[:3]}")
                     
                     # Start background task for Meta ad creatives processing AFTER comprehensive_ads is created
                     if meta_insights and len(meta_insights) > 0:
@@ -4008,15 +3996,12 @@ def main():
         tab1, tab2, tab3 = st.tabs(["📊 All Ads Summary", "🎯 Campaign Explorer", "🔍 Product/Creator Explorer"])
         
         with tab1:
-            print(f"DEBUG: Displaying summary tab with {len(st.session_state.comprehensive_ads) if st.session_state.comprehensive_ads else 0} ads")
             display_summary_tab(st.session_state.comprehensive_ads, config['top_n'])
         
         with tab2:
-            print(f"DEBUG: Displaying campaign explorer tab with {len(st.session_state.comprehensive_ads) if st.session_state.comprehensive_ads else 0} ads")
             display_campaign_explorer_tab(st.session_state.comprehensive_ads, config['top_n'], config['core_products_input'])
         
         with tab3:
-            print(f"DEBUG: Displaying product creator explorer tab with {len(st.session_state.comprehensive_ads) if st.session_state.comprehensive_ads else 0} ads")
             display_product_creator_explorer_tab(st.session_state.comprehensive_ads)
     
     else:
