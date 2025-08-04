@@ -1983,6 +1983,10 @@ def format_percentage(value):
     """Format value as percentage"""
     return f"{value:.2f}%"
 
+def format_roas(value):
+    """Format ROAS value to 6 decimal places"""
+    return f"{value:.6f}"
+
 def create_metric_card(label, value, format_func=str):
     """Create a metric card with label and formatted value"""
     st.markdown(f"""
@@ -2107,7 +2111,7 @@ def generate_markdown_report(ad_objects, date_from, date_to, top_n, core_product
 | Total Ads | {overall_metrics['total_ads']:,} |
 | Total Spend | ${overall_metrics['total_spend']:,.2f} |
 | Total Revenue | ${overall_metrics['total_revenue']:,.2f} |
-| ROAS | {overall_metrics['roas']:.2f}x |
+| ROAS | {overall_metrics['roas']:.6f}x |
 | CTR | {overall_metrics['ctr']:.2f}% |
 | CPM | ${overall_metrics['cpm']:.2f} |
 | Thumbstop | {overall_metrics['thumbstop']:.1f}% |
@@ -2144,7 +2148,7 @@ def generate_markdown_report(ad_objects, date_from, date_to, top_n, core_product
     
     for i, (_, ad) in enumerate(top_ads.iterrows(), 1):
         # report += f"| {i} | [{ad['ad_name']}](www.google.com) | {ad['campaign']} | {ad['product']} | {ad['ad_type']} | {ad['creator']} | {ad['agency']} | ${ad['spend']:,.2f} | {ad['roas']:.2f}x | {ad['ctr']:.2f}% | ${ad['cpm']:.2f} | {ad['thumbstop']:.1f}% | ${ad['aov']:.2f} |\n"
-        report += f"| {i} | {ad['ad_name']} | {ad['campaign']} | {ad['product']} | {ad['ad_type']} | {ad['creator']} | {ad['agency']} | ${ad['spend']:,.2f} | {ad['roas']:.2f}x | {ad['ctr']:.2f}% | ${ad['cpm']:.2f} | {ad['thumbstop']:.1f}% | ${ad['aov']:.2f} |\n"
+        report += f"| {i} | {ad['ad_name']} | {ad['campaign']} | {ad['product']} | {ad['ad_type']} | {ad['creator']} | {ad['agency']} | ${ad['spend']:,.2f} | {ad['roas']:.6f}x | {ad['ctr']:.2f}% | ${ad['cpm']:.2f} | {ad['thumbstop']:.1f}% | ${ad['aov']:.2f} |\n"
     
     # Top N Products
     report += f"""
@@ -2159,7 +2163,7 @@ def generate_markdown_report(ad_objects, date_from, date_to, top_n, core_product
     top_products = products_df.head(top_n)
     
     for i, (product, row) in enumerate(top_products.iterrows(), 1):
-        report += f"| {i} | {product} | {int(row['Ads Count'])} | ${row['Spend']:,.2f} | {row['ROAS']:.2f}x | {row['CTR']:.2f}% | ${row['CPM']:.2f} | {row['Thumbstop']:.1f}% | ${row['AOV']:.2f} |\n"
+        report += f"| {i} | {product} | {int(row['Ads Count'])} | ${row['Spend']:,.2f} | {row['ROAS']:.6f}x | {row['CTR']:.2f}% | ${row['CPM']:.2f} | {row['Thumbstop']:.1f}% | ${row['AOV']:.2f} |\n"
     
     # Top N Creators
     report += f"""
@@ -2174,7 +2178,7 @@ def generate_markdown_report(ad_objects, date_from, date_to, top_n, core_product
     top_creators = creators_df.head(top_n)
     
     for i, (creator, row) in enumerate(top_creators.iterrows(), 1):
-        report += f"| {i} | {creator} | {int(row['Ads Count'])} | ${row['Spend']:,.2f} | {row['ROAS']:.2f}x | {row['CTR']:.2f}% | ${row['CPM']:.2f} | {row['Thumbstop']:.1f}% | ${row['AOV']:.2f} |\n"
+        report += f"| {i} | {creator} | {int(row['Ads Count'])} | ${row['Spend']:,.2f} | {row['ROAS']:.6f}x | {row['CTR']:.2f}% | ${row['CPM']:.2f} | {row['Thumbstop']:.1f}% | ${row['AOV']:.2f} |\n"
     
     # Top N Agencies
     report += f"""
@@ -2189,7 +2193,7 @@ def generate_markdown_report(ad_objects, date_from, date_to, top_n, core_product
     top_agencies = agencies_df.head(top_n)
     
     for i, (agency, row) in enumerate(top_agencies.iterrows(), 1):
-        report += f"| {i} | {agency} | {int(row['Ads Count'])} | ${row['Spend']:,.2f} | {row['ROAS']:.2f}x | {row['CTR']:.2f}% | ${row['CPM']:.2f} | {row['Thumbstop']:.1f}% | ${row['AOV']:.2f} |\n"
+        report += f"| {i} | {agency} | {int(row['Ads Count'])} | ${row['Spend']:,.2f} | {row['ROAS']:.6f}x | {row['CTR']:.2f}% | ${row['CPM']:.2f} | {row['Thumbstop']:.1f}% | ${row['AOV']:.2f} |\n"
     
     # Campaign Analysis
     report += "\n## 📈 Campaign Analysis\n"
@@ -2244,7 +2248,7 @@ def generate_markdown_report(ad_objects, date_from, date_to, top_n, core_product
 - Total Ads: {campaign_metrics['total_ads']:,}
 - Total Spend: ${campaign_metrics['total_spend']:,.2f}
 - Total Revenue: ${campaign_metrics['total_revenue']:,.2f}
-- ROAS: {campaign_metrics['roas']:.2f}x
+- ROAS: {campaign_metrics['roas']:.6f}x
 - CTR: {campaign_metrics['ctr']:.2f}%
 - CPM: ${campaign_metrics['cpm']:.2f}
 - Thumbstop: {campaign_metrics['thumbstop']:.1f}%
@@ -2300,7 +2304,7 @@ def generate_markdown_report(ad_objects, date_from, date_to, top_n, core_product
 - Total Ads: {product_metrics['total_ads']:,}
 - Total Spend: ${product_metrics['total_spend']:,.2f}
 - Total Revenue: ${product_metrics['total_revenue']:,.2f}
-- ROAS: {product_metrics['roas']:.2f}x
+- ROAS: {product_metrics['roas']:.6f}x
 - CTR: {product_metrics['ctr']:.2f}%
 - CPM: ${product_metrics['cpm']:.2f}
 - Thumbstop: {product_metrics['thumbstop']:.1f}%
@@ -2330,7 +2334,7 @@ def generate_markdown_report(ad_objects, date_from, date_to, top_n, core_product
             top_product_ads = product_ads_df.head(top_n)
             
             for i, (_, ad) in enumerate(top_product_ads.iterrows(), 1):
-                report += f"| {i} | {ad['ad_name']} | ${ad['spend']:,.2f} | {ad['roas']:.2f}x | {ad['ctr']:.2f}% | ${ad['cpm']:.2f} | {ad['thumbstop']:.1f}% | ${ad['aov']:.2f} |\n"
+                report += f"| {i} | {ad['ad_name']} | ${ad['spend']:,.2f} | {ad['roas']:.6f}x | {ad['ctr']:.2f}% | ${ad['cpm']:.2f} | {ad['thumbstop']:.1f}% | ${ad['aov']:.2f} |\n"
             
             # Get top creators for this product
             product_creators_df = calculate_aggregated_metrics(product_ads, 'creator', 10000)
@@ -2346,7 +2350,7 @@ def generate_markdown_report(ad_objects, date_from, date_to, top_n, core_product
 """
                 
                 for i, (creator, row) in enumerate(top_product_creators.iterrows(), 1):
-                    report += f"| {i} | {creator} | {int(row['Ads Count'])} | ${row['Spend']:,.2f} | {row['ROAS']:.2f}x | {row['CTR']:.2f}% | ${row['CPM']:.2f} | {row['Thumbstop']:.1f}% | ${row['AOV']:.2f} |\n"
+                    report += f"| {i} | {creator} | {int(row['Ads Count'])} | ${row['Spend']:,.2f} | {row['ROAS']:.6f}x | {row['CTR']:.2f}% | ${row['CPM']:.2f} | {row['Thumbstop']:.1f}% | ${row['AOV']:.2f} |\n"
     
     return report
 
@@ -2443,7 +2447,7 @@ def display_summary_tab(ad_objects, top_n=DEFAULT_TOP_N):
         create_metric_card("Total Spend", overall_metrics['total_spend'], format_currency)
     
     with col2:
-        create_metric_card("ROAS", overall_metrics['roas'])
+        create_metric_card("ROAS", overall_metrics['roas'], format_roas)
         create_metric_card("CTR", overall_metrics['ctr'], format_percentage)
     
     with col3:
@@ -2563,7 +2567,7 @@ def display_summary_tab(ad_objects, top_n=DEFAULT_TOP_N):
         
         # Format the display values
         display_agencies_df['Spend_Display'] = display_agencies_df['Spend'].apply(format_currency)
-        display_agencies_df['ROAS_Display'] = display_agencies_df['ROAS'].apply(lambda x: f"{x:.2f}")
+        display_agencies_df['ROAS_Display'] = display_agencies_df['ROAS'].apply(lambda x: f"{x:.6f}")
         display_agencies_df['CTR_Display'] = display_agencies_df['CTR'].apply(lambda x: f"{x:.2f}%")
         display_agencies_df['CPM_Display'] = display_agencies_df['CPM'].apply(lambda x: f"${x:.2f}")
         display_agencies_df['Thumbstop_Display'] = display_agencies_df['Thumbstop'].apply(lambda x: f"{x:.2f}%")
@@ -3015,7 +3019,7 @@ def display_campaign_explorer_tab(ad_objects, top_n=DEFAULT_TOP_N, core_products
                 create_metric_card("Total Spend", campaign_metrics['total_spend'], format_currency)
             
             with col2:
-                create_metric_card("ROAS", campaign_metrics['roas'])
+                create_metric_card("ROAS", campaign_metrics['roas'], format_roas)
                 create_metric_card("CTR", campaign_metrics['ctr'], format_percentage)
             
             with col3:
@@ -3083,7 +3087,7 @@ def display_campaign_explorer_tab(ad_objects, top_n=DEFAULT_TOP_N, core_products
                         create_metric_card("Spend", product_metrics['total_spend'], format_currency)
                     
                     with col2:
-                        create_metric_card("ROAS", product_metrics['roas'])
+                        create_metric_card("ROAS", product_metrics['roas'], format_roas)
                         create_metric_card("CTR", product_metrics['ctr'], format_percentage)
                     
                     with col3:
@@ -3272,7 +3276,7 @@ def main():
         value=default_core_products_text, 
         height=100, 
         key="core_products",
-        help="To group product codes, separate codes with comma."
+        help="Separate multiple codes for the same product with a comma."
     )
     
     # Check if configuration has changed and clear cached data if needed
@@ -3499,89 +3503,93 @@ def main():
             return
         
         # Display context information in a clean, minimal layout
-        col1, col2, col3, col4, col5 = st.columns(5)
+        status_container = st.container()
         
-        with col1:
-            st.caption("✅ Report generated successfully!")
-            # Display background task status if available
-            if hasattr(st.session_state, 'background_task_status'):
-                st.caption(st.session_state.background_task_status)
-            # Display Google Doc success message if available
-            if hasattr(st.session_state, 'google_doc_success'):
-                st.caption("✅ Google Doc created successfully!")
-                del st.session_state.google_doc_success
-        
-        with col2:
-            st.caption(f"📅 Date Range: {config['date_from']} to {config['date_to']}")
-        
-        with col3:
-            data_source_display = "Northbeam" if config['use_northbeam'] else "Meta"
-            st.caption(f"📊 Data Source: {data_source_display}")
-        
-        with col4:
-            merge_status = "On" if config['merge_ads'] else "Off"
-            st.caption(f"🔗 Merge Ads: {merge_status}")
-        
-        with col5:
-            generate_doc_button = st.button("📄 Generate Google Doc", type="secondary")
+        with status_container:
+            col1, col2, col3, col4, col5 = st.columns(5)
             
-            if generate_doc_button:
-                with st.spinner("📄 Generating Google Doc..."):
-                    try:
-                        # Parse core products from user input
-                        core_products_list = []
-                        if core_products_input:
-                            for line in core_products_input.strip().split('\n'):
-                                if line.strip():
-                                    products = [p.strip() for p in line.split(',') if p.strip()]
-                                    if products:
-                                        core_products_list.append(products)
+            with col1:
+                st.caption("✅ Report generated successfully!")
+                # Display background task status if available
+                if hasattr(st.session_state, 'background_task_status'):
+                    st.caption(st.session_state.background_task_status)
+                # Display Google Doc success message if available
+                if hasattr(st.session_state, 'google_doc_success'):
+                    st.caption("✅ Google Doc created successfully!")
+                    del st.session_state.google_doc_success
+            
+            with col2:
+                st.caption(f"📅 Date Range: {config['date_from']} to {config['date_to']}")
+            
+            with col3:
+                data_source_display = "Northbeam" if config['use_northbeam'] else "Meta"
+                st.caption(f"📊 Data Source: {data_source_display}")
+            
+            with col4:
+                merge_status = "On" if config['merge_ads'] else "Off"
+                st.caption(f"🔗 Merge Ads: {merge_status}")
+            
+            with col5:
+                generate_doc_button = st.button("📄 Generate Google Doc", type="secondary")
+        
+        # Handle Google Doc generation outside the status container to prevent duplication
+        if generate_doc_button:
+            with st.spinner("📄 Generating Google Doc..."):
+                try:
+                    # Parse core products from user input
+                    core_products_list = []
+                    if core_products_input:
+                        for line in core_products_input.strip().split('\n'):
+                            if line.strip():
+                                products = [p.strip() for p in line.split(',') if p.strip()]
+                                if products:
+                                    core_products_list.append(products)
+                    
+                    # Generate markdown report using current UI values
+                    report_markdown = generate_markdown_report(
+                        st.session_state.comprehensive_ads, 
+                        date_from, 
+                        date_to, 
+                        top_n, 
+                        core_products_input, 
+                        merge_ads, 
+                        use_northbeam
+                    )
+                    
+                    # Format dates for filename
+                    date_from_formatted = date_from.replace('-', '')
+                    date_to_formatted = date_to.replace('-', '')
+                    
+                    # Save markdown to file
+                    report_filename = f"reports/campaign_analysis_report_{date_from_formatted}-{date_to_formatted}.md"
+                    with open(report_filename, 'w') as f:
+                        f.write(report_markdown)
+                    
+                    # Upload to Google Drive
+                    doc_title = f"Thrive Causemetics Campaign Analysis - {date_from} to {date_to}"
+                    shareable_link = export_report_to_google_doc(report_filename, doc_title)
+                    
+                    if shareable_link:
+                        # Set session state to show success message in main status area
+                        st.session_state.google_doc_success = True
+                        st.markdown(f"**Shareable Link:** {shareable_link}")
                         
-                        # Generate markdown report using current UI values
-                        report_markdown = generate_markdown_report(
-                            st.session_state.comprehensive_ads, 
-                            date_from, 
-                            date_to, 
-                            top_n, 
-                            core_products_input, 
-                            merge_ads, 
-                            use_northbeam
+                        # Add download button for local file
+                        with open(report_filename, 'r') as f:
+                            markdown_content = f.read()
+                        st.download_button(
+                            label="📥 Download Markdown Report",
+                            data=markdown_content,
+                            file_name=f"campaign_analysis_report_{date_from_formatted}-{date_to_formatted}.md",
+                            mime="text/markdown"
                         )
+                    else:
+                        st.warning("⚠️ Google Doc creation failed, but markdown report was saved locally")
+                        st.info(f"Local file: {report_filename}")
                         
-                        # Format dates for filename
-                        date_from_formatted = date_from.replace('-', '')
-                        date_to_formatted = date_to.replace('-', '')
-                        
-                        # Save markdown to file
-                        report_filename = f"reports/campaign_analysis_report_{date_from_formatted}-{date_to_formatted}.md"
-                        with open(report_filename, 'w') as f:
-                            f.write(report_markdown)
-                        
-                        # Upload to Google Drive
-                        doc_title = f"Thrive Causemetics Campaign Analysis - {date_from} to {date_to}"
-                        shareable_link = export_report_to_google_doc(report_filename, doc_title)
-                        
-                        if shareable_link:
-                            # Set session state to show success message in main status area
-                            st.session_state.google_doc_success = True
-                            st.markdown(f"**Shareable Link:** {shareable_link}")
-                            
-                            # Add download button for local file
-                            with open(report_filename, 'r') as f:
-                                markdown_content = f.read()
-                            st.download_button(
-                                label="📥 Download Markdown Report",
-                                data=markdown_content,
-                                file_name=f"campaign_analysis_report_{date_from_formatted}-{date_to_formatted}.md",
-                                mime="text/markdown"
-                            )
-                        else:
-                            st.warning("⚠️ Google Doc creation failed, but markdown report was saved locally")
-                            st.info(f"Local file: {report_filename}")
-                            
-                    except Exception as e:
-                        st.error(f"❌ Error generating Google Doc: {str(e)}")
-                        st.exception(e)
+                except Exception as e:
+                    st.error(f"❌ Error generating Google Doc: {str(e)}")
+                    st.exception(e)
         
         st.markdown("---")
         
