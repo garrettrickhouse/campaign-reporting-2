@@ -27,6 +27,8 @@ load_dotenv()
 # User Variables Config
 MERGE_ADS_WITH_SAME_NAME = True
 USE_NORTHBEAM_DATA = True  # Set to True to use Northbeam data for spend/revenue metrics
+DOWNLOAD_REPORTS_LOCALLY = True  # Set to True to save all fetched/processed data locally (in addition to S3)
+# Note: When DOWNLOAD_REPORTS_LOCALLY = False, files are only saved to S3, saving disk space
 
 # Configuration - these will be set from frontend data
 # DATE_FROM = "2025-06-30" # Default start date
@@ -123,22 +125,52 @@ def save_file_to_s3(file_path, s3_key):
         return False
 
 def save_json_to_s3(data, s3_key):
-    """Save JSON data directly to S3 - DISABLED FOR NOW"""
-    # S3 uploads disabled - using local storage only
-    print(f"📁 S3 uploads disabled - using local storage only")
-    return False
+    """Save JSON data directly to S3"""
+    try:
+        s3_client = get_s3_client()
+        json_data = json.dumps(data, indent=2)
+        s3_client.put_object(
+            Bucket=S3_BUCKET,
+            Key=s3_key,
+            Body=json_data,
+            ContentType='application/json'
+        )
+        print(f"✅ Saved JSON to S3: s3://{S3_BUCKET}/{s3_key}")
+        return True
+    except Exception as e:
+        print(f"⚠️ S3 access denied or unavailable: {e}")
+        print(f"📁 Falling back to local storage only")
+        return False
 
 def load_json_from_s3(s3_key):
-    """Load JSON data from S3 - DISABLED FOR NOW"""
-    # S3 downloads disabled - using local storage only
-    print(f"📁 S3 downloads disabled - using local storage only")
-    return None
+    """Load JSON data from S3"""
+    try:
+        s3_client = get_s3_client()
+        response = s3_client.get_object(Bucket=S3_BUCKET, Key=s3_key)
+        data = json.loads(response['Body'].read().decode('utf-8'))
+        print(f"✅ Loaded JSON from S3: s3://{S3_BUCKET}/{s3_key}")
+        return data
+    except Exception as e:
+        print(f"⚠️ S3 access denied or unavailable: {e}")
+        print(f"📁 Falling back to local storage only")
+        return None
 
 def file_exists_in_s3(s3_key):
-    """Check if a file exists in S3 - DISABLED FOR NOW"""
-    # S3 checks disabled - using local storage only
-    print(f"📁 S3 checks disabled - using local storage only")
-    return False
+    """Check if a file exists in S3"""
+    try:
+        s3_client = get_s3_client()
+        s3_client.head_object(Bucket=S3_BUCKET, Key=s3_key)
+        return True
+    except Exception as e:
+        # Check if it's a 404 error (file not found) vs actual S3 access issue
+        if "404" in str(e) or "Not Found" in str(e):
+            # File doesn't exist, which is normal - don't print error
+            return False
+        else:
+            # Actual S3 access issue
+            print(f"⚠️ S3 access denied or unavailable: {e}")
+            print(f"📁 Falling back to local storage only")
+            return False
 
 def is_s3_available():
     """Check if S3 is available and accessible"""
@@ -254,7 +286,15 @@ def extract_ad_type_from_ad_name(ad_name, video_keyword="e:video", static_keywor
     elif static_keyword.lower() in ad_name_lower:
         return "Static"
     else:
-        return "Unknown"
+        # Try to detect from other patterns in the ad name
+        if 'video' in ad_name_lower:
+            return "Video"
+        elif 'static' in ad_name_lower:
+            return "Static"
+        elif 'carousel' in ad_name_lower:
+            return "Carousel"
+        else:
+            return "Unknown"
 
 def extract_campaign_type_from_name(campaign_name):
     """Extract campaign type from campaign name (value between 'n:' and next '_')"""
@@ -299,11 +339,15 @@ def extract_product_from_ad_name(ad_name):
             if end_index != -1:
                 extracted_product = ad_name[start_index:end_index]
                 
-                # Apply product merging logic from CORE_PRODUCTS
-                for product_group in CORE_PRODUCTS:
-                    if isinstance(product_group, list) and extracted_product in product_group:
-                        # Return the first product name as the label for merged products
-                        return product_group[0]
+                # Apply product merging logic from CORE_PRODUCTS if available
+                try:
+                    for product_group in CORE_PRODUCTS:
+                        if isinstance(product_group, list) and extracted_product in product_group:
+                            # Return the first product name as the label for merged products
+                            return product_group[0]
+                except NameError:
+                    # CORE_PRODUCTS not defined, return the original product
+                    pass
                 
                 # If not in any merged group, return the original product
                 return extracted_product
@@ -475,24 +519,24 @@ def fetch_meta_insights(date_from=None, date_to=None):
         date_from_formatted = format_date_for_filename(date_from)
         date_to_formatted = format_date_for_filename(date_to)
         
-        # Save to S3 - DISABLED FOR NOW
-        # s3_key = f"reports/meta_insights_{date_from_formatted}-{date_to_formatted}.json"
-        # save_json_to_s3(ads_list, s3_key)
+        # Save to S3
+        s3_key = f"campaign-reporting/raw/meta_insights/meta_insights_{date_from_formatted}-{date_to_formatted}.json"
+        save_json_to_s3(ads_list, s3_key)
         
-        # Also save locally for backward compatibility
-        meta_json_filename = f"reports/meta_insights_{date_from_formatted}-{date_to_formatted}.json"
-        os.makedirs("reports", exist_ok=True)
-        with open(meta_json_filename, 'w') as f:
-            json.dump(ads_list, f, indent=2)
-        print(f"💾 Saved raw Meta insights JSON: {meta_json_filename}")
+        # Save locally if enabled
+        if DOWNLOAD_REPORTS_LOCALLY:
+            meta_json_filename = f"campaign-reporting/raw/meta_insights/meta_insights_{date_from_formatted}-{date_to_formatted}.json"
+            os.makedirs("campaign-reporting/raw/meta_insights", exist_ok=True)
+            with open(meta_json_filename, 'w') as f:
+                json.dump(ads_list, f, indent=2)
+            print(f"💾 Saved raw Meta insights JSON: {meta_json_filename}")
+        else:
+            print(f"💾 Meta insights saved to S3 only (local saving disabled)")
     
     return ads_list
 
 def filter_attribution_data(df, target_accounting_mode, target_platform):
     """Filter dataframe to specific attribution configuration and platform"""
-    print(f"\n🔍 FILTERING NORTHBEAM DATA:")
-    print(f"   - Target Accounting Mode: {target_accounting_mode}")
-    print(f"   - Target Platform: {target_platform}")
     
     # Filter the data
     original_count = len(df)
@@ -511,7 +555,7 @@ def filter_attribution_data(df, target_accounting_mode, target_platform):
         print("   ⚠️ No platform column found")
     
     filtered_count = len(filtered_df)
-    print(f"   - Filtered from {original_count} to {filtered_count} rows")
+    print(f"🔍 Filtered Northbeam data from {original_count} to {filtered_count} rows")
     
     return filtered_df
 
@@ -641,9 +685,12 @@ def download_export_data(export_id, start_date, end_date):
                     'adset_id': str
                 })
                 
-                # Save CSV locally
-                csv_filename = f"reports/northbeam_{start_date.replace('-', '')}-{end_date.replace('-', '')}.csv"
-                df.to_csv(csv_filename, index=False)
+                # Save CSV locally (only if local saving is enabled)
+                if DOWNLOAD_REPORTS_LOCALLY:
+                    csv_filename = f"campaign-reporting/raw/northbeam/northbeam_{start_date.replace('-', '')}-{end_date.replace('-', '')}.csv"
+                    os.makedirs("campaign-reporting/raw/northbeam", exist_ok=True)
+                    df.to_csv(csv_filename, index=False)
+                    print(f"💾 Saved Northbeam CSV locally: {csv_filename}")
                 
                 return df
         except Exception as e:
@@ -678,10 +725,12 @@ def download_export_data(export_id, start_date, end_date):
                 })
                 print(f"✅ Downloaded {len(df)} rows from S3")
                 
-                # Save CSV locally
-                csv_filename = f"northbeam_{start_date.replace('-', '')}-{end_date.replace('-', '')}.csv"
-                df.to_csv(csv_filename, index=False)
-                print(f"💾 Saved Northbeam CSV locally: {csv_filename}")
+                # Save CSV locally (only if local saving is enabled)
+                if DOWNLOAD_REPORTS_LOCALLY:
+                    csv_filename = f"campaign-reporting/raw/northbeam/northbeam_{start_date.replace('-', '')}-{end_date.replace('-', '')}.csv"
+                    os.makedirs("campaign-reporting/raw/northbeam", exist_ok=True)
+                    df.to_csv(csv_filename, index=False)
+                    print(f"💾 Saved Northbeam CSV locally: {csv_filename}")
                 
                 return df
             else:
@@ -722,7 +771,7 @@ def fetch_northbeam_data(date_from=None, date_to=None):
     date_to_formatted = format_date_for_filename(date_to)
     
     # Save to S3
-    s3_key = f"reports/northbeam_{date_from_formatted}-{date_to_formatted}.csv"
+    s3_key = f"campaign-reporting/raw/northbeam/northbeam_{date_from_formatted}-{date_to_formatted}.csv"
     csv_buffer = io.StringIO()
     filtered_df.to_csv(csv_buffer, index=False)
     try:
@@ -737,11 +786,14 @@ def fetch_northbeam_data(date_from=None, date_to=None):
     except Exception as e:
         print(f"❌ Failed to save Northbeam CSV to S3: {e}")
     
-    # Also save locally for backward compatibility
-    csv_filename = f"reports/northbeam_{date_from_formatted}-{date_to_formatted}.csv"
-    os.makedirs("reports", exist_ok=True)
-    filtered_df.to_csv(csv_filename, index=False)
-    print(f"💾 Saved Northbeam CSV: {csv_filename}")
+    # Save locally if enabled
+    if DOWNLOAD_REPORTS_LOCALLY:
+        csv_filename = f"campaign-reporting/raw/northbeam/northbeam_{date_from_formatted}-{date_to_formatted}.csv"
+        os.makedirs("campaign-reporting/raw/northbeam", exist_ok=True)
+        filtered_df.to_csv(csv_filename, index=False)
+        print(f"💾 Saved Northbeam CSV: {csv_filename}")
+    else:
+        print(f"💾 Northbeam CSV saved to S3 only (local saving disabled)")
     
     return filtered_df
 
@@ -764,7 +816,7 @@ def fetch_all_data_sequentially(date_from=None, date_to=None):
     print(f"\n🔍 STEP 1: CHECKING EXISTING DATA FILES...")
     
     # Always fetch fresh data for new date ranges
-    print(f"🔄 Fetching fresh data for date range: {date_from} to {date_to}")
+    # print(f"🔄 Fetching fresh data for date range: {date_from} to {date_to}")
     
     # Check for existing data files
     # Safety check for date_from and date_to
@@ -774,8 +826,8 @@ def fetch_all_data_sequentially(date_from=None, date_to=None):
     date_from_formatted = format_date_for_filename(date_from)
     date_to_formatted = format_date_for_filename(date_to)
     
-    meta_insights_file = f"reports/meta_insights_{date_from_formatted}-{date_to_formatted}.json"
-    northbeam_file = f"reports/northbeam_{date_from_formatted}-{date_to_formatted}.csv"
+    meta_insights_file = f"campaign-reporting/raw/meta_insights/meta_insights_{date_from_formatted}-{date_to_formatted}.json"
+    northbeam_file = f"campaign-reporting/raw/northbeam/northbeam_{date_from_formatted}-{date_to_formatted}.csv"
     
     existing_files = {
         'meta_insights': None,
@@ -783,36 +835,96 @@ def fetch_all_data_sequentially(date_from=None, date_to=None):
     }
     
     # Check which files exist (S3 first, then local fallback)
-    s3_meta_key = f"reports/meta_insights_{date_from_formatted}-{date_to_formatted}.json"
-    s3_northbeam_key = f"reports/northbeam_{date_from_formatted}-{date_to_formatted}.csv"
+    s3_meta_key = f"campaign-reporting/raw/meta_insights/meta_insights_{date_from_formatted}-{date_to_formatted}.json"
+    s3_northbeam_key = f"campaign-reporting/raw/northbeam/northbeam_{date_from_formatted}-{date_to_formatted}.csv"
     
-    # Check for local Meta insights file
-    if os.path.exists(meta_insights_file):
+    # Check for Meta insights file (S3 first, then local fallback)
+    # print(f"🔍 Checking for Meta insights: {s3_meta_key}")
+    if file_exists_in_s3(s3_meta_key):
         try:
-            with open(meta_insights_file, 'r') as f:
-                existing_files['meta_insights'] = json.load(f)
-            print(f"✅ Found existing Meta insights locally: {len(existing_files['meta_insights'])} ads")
+            existing_files['meta_insights'] = load_json_from_s3(s3_meta_key)
+            if existing_files['meta_insights']:
+                print(f"✅ Found existing Meta insights in S3: {len(existing_files['meta_insights'])} ads")
         except Exception as e:
-            print(f"⚠️ Error loading existing Meta insights: {e}")
+            print(f"⚠️ Error loading existing Meta insights from S3: {e}")
+    else:
+        print(f"📁 Meta insights not found in S3")
     
-    # Check for local Northbeam data file
-    if os.path.exists(northbeam_file):
+    # Fallback to local Meta insights file (only if local saving is enabled)
+    if DOWNLOAD_REPORTS_LOCALLY and existing_files['meta_insights'] is None:
+        # print(f"🔍 Checking for local Meta insights: {meta_insights_file}")
+        if os.path.exists(meta_insights_file):
+            try:
+                with open(meta_insights_file, 'r') as f:
+                    existing_files['meta_insights'] = json.load(f)
+                print(f"✅ Found existing Meta insights locally: {len(existing_files['meta_insights'])} ads")
+            except Exception as e:
+                print(f"⚠️ Error loading existing Meta insights: {e}")
+        else:
+            print(f"📁 Meta insights not found locally")
+    
+    # Check for Northbeam data file (S3 first, then local fallback)
+    # print(f"🔍 Checking for Northbeam data: {s3_northbeam_key}")
+    if file_exists_in_s3(s3_northbeam_key):
         try:
-            # Read CSV with specific dtype to ensure ID columns are treated as strings
-            existing_files['northbeam_data'] = pd.read_csv(northbeam_file, dtype={
+            # Download CSV from S3 to temporary file
+            s3_client = get_s3_client()
+            response = s3_client.get_object(Bucket=S3_BUCKET, Key=s3_northbeam_key)
+            csv_content = response['Body'].read().decode('utf-8')
+            # Create a StringIO object to read CSV from memory
+            csv_buffer = io.StringIO(csv_content)
+            existing_files['northbeam_data'] = pd.read_csv(csv_buffer, dtype={
                 'ad_id': str,
                 'campaign_id': str,
                 'adset_id': str
             })
-            print(f"✅ Found existing Northbeam data locally: {len(existing_files['northbeam_data'])} rows")
+            print(f"✅ Found existing Northbeam data in S3: {len(existing_files['northbeam_data'])} rows")
         except Exception as e:
-            print(f"⚠️ Error loading existing Northbeam data: {e}")
+            print(f"⚠️ Error loading existing Northbeam data from S3: {e}")
+    else:
+        print(f"📁 Northbeam data not found in S3")
+    
+    # Fallback to local Northbeam data file (only if local saving is enabled)
+    if DOWNLOAD_REPORTS_LOCALLY and existing_files['northbeam_data'] is None:
+        print(f"🔍 Checking for local Northbeam data: {northbeam_file}")
+        if os.path.exists(northbeam_file):
+            try:
+                # Read CSV with specific dtype to ensure ID columns are treated as strings
+                existing_files['northbeam_data'] = pd.read_csv(northbeam_file, dtype={
+                    'ad_id': str,
+                    'campaign_id': str,
+                    'adset_id': str
+                })
+                print(f"✅ Found existing Northbeam data locally: {len(existing_files['northbeam_data'])} rows")
+            except Exception as e:
+                print(f"⚠️ Error loading existing Northbeam data: {e}")
+        else:
+            print(f"📁 Northbeam data not found locally")
     
     # Initialize with existing data
     meta_insights = existing_files['meta_insights']
     northbeam_df = existing_files['northbeam_data']
     
     print(f"\n⚡ STEP 2: FETCHING MISSING RAW DATA SEQUENTIALLY...")
+    
+    # Check if we should use cached files only
+    if USE_CACHED_FILES:
+        print("🔄 USE_CACHED_FILES is enabled - checking for existing files")
+        
+        # Check if we have the required files for this date range
+        missing_files = []
+        if meta_insights is None:
+            missing_files.append("Meta insights")
+        if northbeam_df is None:
+            missing_files.append("Northbeam data")
+        
+        if missing_files:
+            print(f"❌ Missing cached files for date range {date_from} to {date_to}: {', '.join(missing_files)}")
+            print("🔄 Fetching fresh data for missing files...")
+            # Continue with fetching fresh data for missing files
+        else:
+            print("✅ All required cached files found - using existing data only")
+            return meta_insights, northbeam_df
     
     # Fetch Meta insights first (if missing)
     if meta_insights is None:
@@ -939,7 +1051,6 @@ def merge_data(northbeam_data, meta_data, date_from=None, date_to=None):
         
         comprehensive_ads.append(ad_object)
     
-    print(f"✅ Merged {len(comprehensive_ads)} ad objects")
     return comprehensive_ads
 
 def get_metric_value(ad, metric_key, data_source='northbeam', default=0.0):
@@ -975,7 +1086,6 @@ def get_metric_value(ad, metric_key, data_source='northbeam', default=0.0):
 
 def merge_ads_with_same_name(ad_objects):
     """Merge ads with the same name and aggregate their metrics"""
-    print(f"DEBUG: Starting merge_ads_with_same_name ad_objects count: {len(ad_objects)}")
     
     merged_ads = {}
     ad_name_counts = {}  # Track how many ads have each name
@@ -1011,7 +1121,7 @@ def merge_ads_with_same_name(ad_objects):
                         'link_clicks': float(ad['metrics']['meta']['link_clicks']),
                         'purchase_value': float(ad['metrics']['meta']['purchase_value']),
                         'purchase_count': float(ad['metrics']['meta']['purchase_count']),
-                        'purchase_roas': float(ad['metrics']['meta'].get('roas', 0.0)),
+                        'purchase_roas': float(ad['metrics']['meta'].get('purchase_roas', 0.0)),
                         'video_views_3s': float(ad['metrics']['meta']['video_views_3s'])
                     },
                     'northbeam': {
@@ -1063,19 +1173,10 @@ def merge_ads_with_same_name(ad_objects):
         
         # Calculate Meta ROAS
         if merged_ad['metrics']['meta']['spend'] > 0:
-            merged_ad['metrics']['meta']['roas'] = merged_ad['metrics']['meta']['purchase_value'] / merged_ad['metrics']['meta']['spend']
+            merged_ad['metrics']['meta']['purchase_roas'] = merged_ad['metrics']['meta']['purchase_value'] / merged_ad['metrics']['meta']['spend']
     
     # Print merge statistics
-    print(f"DEBUG: Merge statistics:")
-    print(f"  - Original ads: {len(ad_objects)}")
-    print(f"  - Merged ads: {len(merged_ads)}")
-    print(f"  - Reduction: {len(ad_objects) - len(merged_ads)} ads")
-    
-    # Show which ad names had multiple ads
-    # print(f"DEBUG: Ad names with multiple ads:")
-    # for ad_name, ad_ids in ad_name_counts.items():
-    #     if len(ad_ids) > 1:
-    #         print(f"  - '{ad_name}': {len(ad_ids)} ads (IDs: {ad_ids})")
+    print(f"✅ Merged {len(ad_objects) - len(merged_ads)} ads with same name ({len(ad_objects)} ➡️ {len(merged_ads)})")
     
     result = list(merged_ads.values())
     return result
@@ -1309,64 +1410,101 @@ class MetaAdCreativesProcessor:
     def get_filename(self, file_type: str, date_from: str = None, date_to: str = None) -> str:
         """Generate standardized filenames"""
         if file_type == "raw":
-            # Raw file is temporary and date-specific
+            # Raw file is date-specific
             date_from_clean = date_from.replace('-', '') if date_from else "temp"
             date_to_clean = date_to.replace('-', '') if date_to else "temp"
-            return f"reports/meta_adcreatives_raw_{date_from_clean}-{date_to_clean}.json"
+            return f"campaign-reporting/raw/meta_adcreatives/meta_adcreatives_{date_from_clean}-{date_to_clean}.json"
         elif file_type == "processed":
-            # Processed file is a single evolving document
-            return "reports/meta_adcreatives_processed.json"
+            # Processed file uses current date
+            return get_master_urls_filename()
         else:
-            return f"reports/meta_adcreatives_{file_type}.json"
+            return f"campaign-reporting/raw/meta_adcreatives/meta_adcreatives_{file_type}.json"
     
     def load_processed_data(self, date_from: str = None, date_to: str = None) -> Dict:
-        """Load existing processed data"""
-        filename = self.get_filename("processed", date_from, date_to)
+        """Load existing processed data - finds most recent master URLs file"""
+        # Try to find the most recent master URLs file
+        try:
+            # List all master URLs files in S3
+            s3_client = get_s3_client()
+            response = s3_client.list_objects_v2(
+                Bucket=S3_BUCKET,
+                Prefix="campaign-reporting/processed/master_urls/master_urls_",
+                MaxKeys=100
+            )
+            
+            if 'Contents' in response:
+                # Sort by date (newest first)
+                files = sorted(
+                    [obj['Key'] for obj in response['Contents'] if obj['Key'].endswith('.json')],
+                    reverse=True
+                )
+                
+                if files:
+                    # Load the most recent file
+                    most_recent_key = files[0]
+                    try:
+                        data = load_json_from_s3(most_recent_key)
+                        if data:
+                            # print(f"✅ Loaded most recent master URLs: {most_recent_key}")
+                            return data
+                    except Exception as e:
+                        print(f"⚠️ Error loading most recent master URLs from S3: {e}")
+            
+        except Exception as e:
+            print(f"⚠️ Error listing master URLs files in S3: {e}")
         
-        # Try S3 first
-        s3_key = "reports/meta_adcreatives_processed.json"
-        if file_exists_in_s3(s3_key):
-            try:
-                data = load_json_from_s3(s3_key)
-                if data:
-                    return data
-            except Exception as e:
-                print(f"⚠️ Error loading processed data from S3: {e}")
+        # Fallback to local files
+        try:
+            local_dir = "campaign-reporting/processed/master_urls"
+            if os.path.exists(local_dir):
+                files = [f for f in os.listdir(local_dir) if f.startswith("master_urls_") and f.endswith(".json")]
+                if files:
+                    # Sort by date (newest first)
+                    files.sort(reverse=True)
+                    most_recent_file = os.path.join(local_dir, files[0])
+                    with open(most_recent_file, 'r') as f:
+                        data = json.load(f)
+                        print(f"✅ Loaded most recent master URLs locally: {most_recent_file}")
+                        return data
+        except Exception as e:
+            print(f"⚠️ Error loading local master URLs: {e}")
         
-        # Fallback to local file
-        if os.path.exists(filename):
-            with open(filename, 'r') as f:
-                return json.load(f)
         return {}
     
     def save_processed_data(self, data: Dict, date_from: str = None, date_to: str = None):
         """Save processed data"""
         filename = self.get_filename("processed", date_from, date_to)
         
-        # Save to S3 - DISABLED FOR NOW
-        # s3_key = f"reports/meta_adcreatives_processed.json"
-        # save_json_to_s3(data, s3_key)
+        # Save to S3
+        s3_key = filename
+        save_json_to_s3(data, s3_key)
         
-        # Also save locally for backward compatibility
-        os.makedirs("reports", exist_ok=True)
-        with open(filename, 'w') as f:
-            json.dump(data, f, indent=2)
+        # Save locally if enabled
+        if DOWNLOAD_REPORTS_LOCALLY:
+            os.makedirs(os.path.dirname(filename), exist_ok=True)
+            with open(filename, 'w') as f:
+                json.dump(data, f, indent=2)
+        else:
+            print(f"💾 Master URLs saved to S3 only (local saving disabled)")
     
     def save_raw_data(self, data: Dict, date_from: str, date_to: str):
-        """Save raw adcreatives data (temporary)"""
+        """Save raw adcreatives data"""
         filename = self.get_filename("raw", date_from, date_to)
         
-        # Save to S3 - DISABLED FOR NOW
-        # s3_key = f"reports/meta_adcreatives_raw_{date_from.replace('-', '')}-{date_to.replace('-', '')}.json"
-        # save_json_to_s3(data, s3_key)
+        # Save to S3
+        s3_key = filename
+        save_json_to_s3(data, s3_key)
         
-        # Also save locally for backward compatibility
-        os.makedirs("reports", exist_ok=True)
-        with open(filename, 'w') as f:
-            json.dump(data, f, indent=2)
+        # Save locally if enabled
+        if DOWNLOAD_REPORTS_LOCALLY:
+            os.makedirs(os.path.dirname(filename), exist_ok=True)
+            with open(filename, 'w') as f:
+                json.dump(data, f, indent=2)
+        else:
+            print(f"💾 Meta ad creatives raw data saved to S3 only (local saving disabled)")
     
     def identify_missing_ads(self, ad_ids: List[str], processed_data: Dict) -> List[str]:
-        """Step 1: Identify ads missing media URLs"""
+        """Step 1: Identify ads missing media URLs or needing next priority attempt"""
         missing_ads = []
         
         for ad_id in ad_ids:
@@ -1383,8 +1521,18 @@ class MetaAdCreativesProcessor:
             has_video_urls = bool(ad_data.get("video_source_url") or ad_data.get("video_permalink_url"))
             has_image_urls = bool(ad_data.get("image_url") or ad_data.get("image_permalink_url"))
             
+            # If no URLs found, check if we should try next priority index
             if not has_video_urls and not has_image_urls:
-                missing_ads.append(ad_id_str)
+                # Check if we have priority tracking and haven't exhausted all attempts
+                current_priority = ad_data.get("priority", 0)
+                max_priority_attempts = ad_data.get("max_priority_attempts", 0)
+                
+                # If we haven't tracked max attempts yet, or if we have more to try
+                if max_priority_attempts == 0 or current_priority < max_priority_attempts - 1:
+                    missing_ads.append(ad_id_str)
+                # If we've exhausted all attempts, skip this ad
+                else:
+                    print(f"⚠️ Ad {ad_id_str} has exhausted all priority attempts ({max_priority_attempts} total)")
         
         return missing_ads
     
@@ -1487,7 +1635,10 @@ class MetaAdCreativesProcessor:
                     "image_permalink_url": "",
                     "video_id": "",
                     "image_hash": "",
-                    "priority": 0
+                    "priority": 0,
+                    "max_priority_attempts": 0,  # Will be set when we extract assets
+                    "all_video_ids": [],  # Track all available video IDs
+                    "all_image_hashes": []  # Track all available image hashes
                 }
         
         return processed_data
@@ -1738,6 +1889,15 @@ class MetaAdCreativesProcessor:
             if not assets:
                 continue
             
+            # Store all available assets in processed data for future retries
+            if ad_id in processed_data:
+                video_assets = [a for a in assets if a[0] == "video"]
+                image_assets = [a for a in assets if a[0] == "image"]
+                
+                processed_data[ad_id]["all_video_ids"] = [a[1] for a in video_assets]
+                processed_data[ad_id]["all_image_hashes"] = [a[1] for a in image_assets]
+                processed_data[ad_id]["max_priority_attempts"] = len(assets)
+            
             # Classify by ad type
             ad_type = ad_types.get(ad_id, "").lower()
             
@@ -1758,14 +1918,20 @@ class MetaAdCreativesProcessor:
             video_to_ads = {}
             
             for ad_id, assets in video_ads.items():
-                video_id = assets[0][1]  # Use highest priority video
-                priority_index = 0  # Highest priority asset
-                video_ids.append(video_id)
-                video_to_ads[video_id] = ad_id
-                # Only update if video_id is missing or different
-                if processed_data[ad_id].get("video_id") != video_id:
+                # Get current priority attempt
+                current_priority = processed_data[ad_id].get("priority", 0)
+                
+                # Find the asset at the current priority index
+                video_assets = [a for a in assets if a[0] == "video"]
+                if current_priority < len(video_assets):
+                    video_id = video_assets[current_priority][1]
+                    video_ids.append(video_id)
+                    video_to_ads[video_id] = ad_id
+                    # Update video_id to current attempt
                     processed_data[ad_id]["video_id"] = video_id
-                    processed_data[ad_id]["priority"] = priority_index
+                    print(f"🔄 Ad {ad_id}: Trying video priority {current_priority} (video_id: {video_id})")
+                else:
+                    print(f"⚠️ Ad {ad_id}: No more video assets to try (current priority: {current_priority})")
             
             video_urls = self.batch_fetch_video_urls(video_ids)
             
@@ -1779,6 +1945,13 @@ class MetaAdCreativesProcessor:
                         processed_data[ad_id]["video_permalink_url"] = urls.get("permalink", "")
                     if urls.get("thumbnail") and not processed_data[ad_id].get("thumbnail_url"):
                         processed_data[ad_id]["thumbnail_url"] = urls["thumbnail"]
+                    
+                    # Check if we got URLs - if not, increment priority for next attempt
+                    if not urls.get("source") and not urls.get("permalink"):
+                        processed_data[ad_id]["priority"] = current_priority + 1
+                        print(f"❌ Ad {ad_id}: Video priority {current_priority} failed, will try priority {current_priority + 1} next time")
+                    else:
+                        print(f"✅ Ad {ad_id}: Video priority {current_priority} succeeded")
         
         # Process image ads
         if image_ads:
@@ -1786,14 +1959,20 @@ class MetaAdCreativesProcessor:
             hash_to_ads = {}
             
             for ad_id, assets in image_ads.items():
-                image_hash = assets[0][1]  # Use highest priority image
-                priority_index = 0  # Highest priority asset
-                image_hashes.append(image_hash)
-                hash_to_ads[image_hash] = ad_id
-                # Only update if image_hash is missing or different
-                if processed_data[ad_id].get("image_hash") != image_hash:
+                # Get current priority attempt
+                current_priority = processed_data[ad_id].get("priority", 0)
+                
+                # Find the asset at the current priority index
+                image_assets = [a for a in assets if a[0] == "image"]
+                if current_priority < len(image_assets):
+                    image_hash = image_assets[current_priority][1]
+                    image_hashes.append(image_hash)
+                    hash_to_ads[image_hash] = ad_id
+                    # Update image_hash to current attempt
                     processed_data[ad_id]["image_hash"] = image_hash
-                    processed_data[ad_id]["priority"] = priority_index
+                    print(f"🔄 Ad {ad_id}: Trying image priority {current_priority} (image_hash: {image_hash})")
+                else:
+                    print(f"⚠️ Ad {ad_id}: No more image assets to try (current priority: {current_priority})")
             
             image_urls = self.batch_fetch_image_urls(image_hashes)
             
@@ -1805,6 +1984,13 @@ class MetaAdCreativesProcessor:
                         processed_data[ad_id]["image_url"] = urls.get("url", "")
                     if not processed_data[ad_id].get("image_permalink_url") or processed_data[ad_id]["image_permalink_url"] != urls.get("permalink", ""):
                         processed_data[ad_id]["image_permalink_url"] = urls.get("permalink", "")
+                    
+                    # Check if we got URLs - if not, increment priority for next attempt
+                    if not urls.get("url") and not urls.get("permalink"):
+                        processed_data[ad_id]["priority"] = current_priority + 1
+                        print(f"❌ Ad {ad_id}: Image priority {current_priority} failed, will try priority {current_priority + 1} next time")
+                    else:
+                        print(f"✅ Ad {ad_id}: Image priority {current_priority} succeeded")
         
         # Process carousel ads (try both video and image)
         if carousel_ads:
@@ -1814,31 +2000,32 @@ class MetaAdCreativesProcessor:
             hash_to_ads = {}
             
             for ad_id, assets in carousel_ads.items():
-                # Find first video and image assets
-                video_priority = None
-                image_priority = None
+                # Get current priority attempt
+                current_priority = processed_data[ad_id].get("priority", 0)
                 
-                for idx, (asset_type, asset_id, priority, source) in enumerate(assets):
-                    if asset_type == "video" and ad_id not in video_to_ads.values() and video_priority is None:
-                        carousel_video_ids.append(asset_id)
-                        video_to_ads[asset_id] = ad_id
-                        # Only update if video_id is missing or different
-                        if processed_data[ad_id].get("video_id") != asset_id:
-                            processed_data[ad_id]["video_id"] = asset_id
-                        video_priority = idx
-                    
-                    if asset_type == "image" and ad_id not in hash_to_ads.values() and image_priority is None:
-                        carousel_image_hashes.append(asset_id)
-                        hash_to_ads[asset_id] = ad_id
-                        # Only update if image_hash is missing or different
-                        if processed_data[ad_id].get("image_hash") != asset_id:
-                            processed_data[ad_id]["image_hash"] = asset_id
-                        if image_priority is None:
-                            image_priority = idx
+                # Find video and image assets at current priority
+                video_assets = [a for a in assets if a[0] == "video"]
+                image_assets = [a for a in assets if a[0] == "image"]
                 
-                # Set priority to the highest priority asset found (lowest index)
-                final_priority = min(p for p in [video_priority, image_priority] if p is not None)
-                processed_data[ad_id]["priority"] = final_priority
+                # Try video at current priority
+                if current_priority < len(video_assets):
+                    video_id = video_assets[current_priority][1]
+                    carousel_video_ids.append(video_id)
+                    video_to_ads[video_id] = ad_id
+                    processed_data[ad_id]["video_id"] = video_id
+                    print(f"🔄 Ad {ad_id}: Carousel trying video priority {current_priority} (video_id: {video_id})")
+                
+                # Try image at current priority
+                if current_priority < len(image_assets):
+                    image_hash = image_assets[current_priority][1]
+                    carousel_image_hashes.append(image_hash)
+                    hash_to_ads[image_hash] = ad_id
+                    processed_data[ad_id]["image_hash"] = image_hash
+                    print(f"🔄 Ad {ad_id}: Carousel trying image priority {current_priority} (image_hash: {image_hash})")
+                
+                # If no assets at current priority, increment for next attempt
+                if current_priority >= len(video_assets) and current_priority >= len(image_assets):
+                    print(f"⚠️ Ad {ad_id}: Carousel no more assets to try (current priority: {current_priority})")
             
             # Fetch carousel video URLs
             if carousel_video_ids:
@@ -1846,6 +2033,8 @@ class MetaAdCreativesProcessor:
                 for video_id, urls in video_urls.items():
                     if video_id in video_to_ads:
                         ad_id = video_to_ads[video_id]
+                        current_priority = processed_data[ad_id].get("priority", 0)
+                        
                         # Only update if URLs are missing or different
                         if not processed_data[ad_id].get("video_source_url") or processed_data[ad_id]["video_source_url"] != urls.get("source", ""):
                             processed_data[ad_id]["video_source_url"] = urls.get("source", "")
@@ -1853,6 +2042,13 @@ class MetaAdCreativesProcessor:
                             processed_data[ad_id]["video_permalink_url"] = urls.get("permalink", "")
                         if urls.get("thumbnail") and not processed_data[ad_id].get("thumbnail_url"):
                             processed_data[ad_id]["thumbnail_url"] = urls["thumbnail"]
+                        
+                        # Check if we got URLs - if not, increment priority for next attempt
+                        if not urls.get("source") and not urls.get("permalink"):
+                            processed_data[ad_id]["priority"] = current_priority + 1
+                            print(f"❌ Ad {ad_id}: Carousel video priority {current_priority} failed, will try priority {current_priority + 1} next time")
+                        else:
+                            print(f"✅ Ad {ad_id}: Carousel video priority {current_priority} succeeded")
             
             # Fetch carousel image URLs
             if carousel_image_hashes:
@@ -1860,11 +2056,20 @@ class MetaAdCreativesProcessor:
                 for image_hash, urls in image_urls.items():
                     if image_hash in hash_to_ads:
                         ad_id = hash_to_ads[image_hash]
+                        current_priority = processed_data[ad_id].get("priority", 0)
+                        
                         # Only update if URLs are missing or different
                         if not processed_data[ad_id].get("image_url") or processed_data[ad_id]["image_url"] != urls.get("url", ""):
                             processed_data[ad_id]["image_url"] = urls.get("url", "")
                         if not processed_data[ad_id].get("image_permalink_url") or processed_data[ad_id]["image_permalink_url"] != urls.get("permalink", ""):
                             processed_data[ad_id]["image_permalink_url"] = urls.get("permalink", "")
+                        
+                        # Check if we got URLs - if not, increment priority for next attempt
+                        if not urls.get("url") and not urls.get("permalink"):
+                            processed_data[ad_id]["priority"] = current_priority + 1
+                            print(f"❌ Ad {ad_id}: Carousel image priority {current_priority} failed, will try priority {current_priority + 1} next time")
+                        else:
+                            print(f"✅ Ad {ad_id}: Carousel image priority {current_priority} succeeded")
         
         print(f"✅ Media URL processing completed")
         return processed_data
@@ -3260,7 +3465,22 @@ def main():
     st.sidebar.subheader("📊 Settings")
     top_n = st.sidebar.number_input("Top N", min_value=1, max_value=50, value=DEFAULT_TOP_N, key="top_n")
     merge_ads = st.sidebar.checkbox("Merge Ads with Same Name", value=DEFAULT_MERGE_ADS_WITH_SAME_NAME, key="merge_ads")
-    use_northbeam = st.sidebar.checkbox("Use Northbeam Data", value=DEFAULT_USE_NORTHBEAM_DATA, key="use_northbeam")
+    use_northbeam = st.sidebar.checkbox(
+        "Use Northbeam Data", 
+        value=DEFAULT_USE_NORTHBEAM_DATA, 
+        key="use_northbeam",
+        help="Toggle between Northbeam and Meta data sources. When data is cached, changes are instant!"
+    )
+    
+    
+    use_cached_files = st.sidebar.checkbox("Use Cached Files", value=True, key="use_cached_files", 
+                                          help="Only use existing Meta insights and Northbeam files. Skip API calls.")
+    
+    # Update the global variable
+    set_use_cached_files(use_cached_files)
+    
+    # Update the global USE_NORTHBEAM_DATA variable for instant switching
+    main.USE_NORTHBEAM_DATA = use_northbeam
     
     st.sidebar.subheader("📦 Core Products")
     
@@ -3274,7 +3494,7 @@ def main():
     core_products_input = st.sidebar.text_area(
         "One product per line", 
         value=default_core_products_text, 
-        height=100, 
+        height=150, 
         key="core_products",
         help="Separate multiple codes for the same product with a comma."
     )
@@ -3282,19 +3502,24 @@ def main():
     # Check if configuration has changed and clear cached data if needed
     if st.session_state.comprehensive_ads and st.session_state.report_config:
         config = st.session_state.report_config
+        # Check if configuration has changed (excluding use_northbeam for instant switching)
         config_changed = (
             config.get('date_from') != date_from or
             config.get('date_to') != date_to or
             config.get('top_n') != top_n or
             config.get('merge_ads') != merge_ads or
-            config.get('use_northbeam') != use_northbeam or
             config.get('core_products_input') != core_products_input
         )
         
+        # Only clear cache if non-northbeam settings changed
         if config_changed:
             st.session_state.comprehensive_ads = None
             st.session_state.report_config = None
             st.info("🔄 Configuration changed. Please click 'Generate Report' to fetch fresh data with the new settings.")
+        else:
+            # Update the use_northbeam setting in the cached config for instant switching
+            if st.session_state.report_config:
+                st.session_state.report_config['use_northbeam'] = use_northbeam
     
 
     
@@ -3312,13 +3537,29 @@ def main():
     with st.sidebar.form("generate_report"):
         generate_button = st.form_submit_button("🔄 Generate Report", type="primary")
     
-    # Clear cached data button
-    if st.session_state.comprehensive_ads:
-        if st.sidebar.button("🗑️ Clear Cached Data", type="secondary"):
-            st.session_state.comprehensive_ads = None
-            st.session_state.report_config = None
-            st.sidebar.success("✅ Cached data cleared!")
-            st.rerun()
+    # Display status updates below the generate button
+    if st.session_state.comprehensive_ads and st.session_state.report_config:
+        st.sidebar.markdown("---")
+        st.sidebar.subheader("📊 Status")
+        
+        # Display success message
+        st.sidebar.success("✅ Report generated successfully!")
+        
+        # Display background task status if available
+        if hasattr(st.session_state, 'background_task_status'):
+            st.sidebar.info(st.session_state.background_task_status)
+        
+        # Display Google Doc success message if available
+        if hasattr(st.session_state, 'google_doc_success'):
+            st.sidebar.success("✅ Google Doc created successfully!")
+            del st.session_state.google_doc_success
+        
+        # Display merge status
+        config = st.session_state.report_config
+        merge_status = "On" if config['merge_ads'] else "Off"
+        st.sidebar.info(f"🔗 Merge Ads: {merge_status}")
+    
+
 
     # Main content area
     if generate_button:
@@ -3354,7 +3595,10 @@ def main():
                 # Define filename for saving
                 date_from_formatted = date_from.replace('-', '')
                 date_to_formatted = date_to.replace('-', '')
-                comprehensive_filename = f"reports/comprehensive_ads_{date_from_formatted}-{date_to_formatted}.json"
+                comprehensive_filename = f"campaign-reporting/processed/comprehensive_ads/comprehensive_ads_{date_from_formatted}-{date_to_formatted}.json"
+                
+                # Set the global flag for using cached files
+                set_use_cached_files(use_cached_files)
                 
                 # Fetch data using the updated configuration
                 meta_insights, northbeam_df = fetch_all_data_sequentially(date_from, date_to)
@@ -3384,14 +3628,17 @@ def main():
                 
                 # Save comprehensive ad objects to reports directory
                 if comprehensive_ads:
-                    # Save to S3 - DISABLED FOR NOW
-                    # s3_key = f"reports/comprehensive_ads_{date_from_formatted}-{date_to_formatted}.json"
-                    # save_json_to_s3(comprehensive_ads, s3_key)
+                    # Save to S3
+                    s3_key = f"campaign-reporting/processed/comprehensive_ads/comprehensive_ads_{date_from_formatted}-{date_to_formatted}.json"
+                    save_json_to_s3(comprehensive_ads, s3_key)
                     
-                    # Also save locally for backward compatibility
-                    os.makedirs("reports", exist_ok=True)
-                    with open(comprehensive_filename, 'w') as f:
-                        json.dump(comprehensive_ads, f, indent=2)
+                    # Save locally if enabled
+                    if DOWNLOAD_REPORTS_LOCALLY:
+                        os.makedirs("campaign-reporting/processed/comprehensive_ads", exist_ok=True)
+                        with open(comprehensive_filename, 'w') as f:
+                            json.dump(comprehensive_ads, f, indent=2)
+                    else:
+                        print(f"💾 Comprehensive ads saved to S3 only (local saving disabled)")
                     
                     # Store data in session state for persistence across reruns
                     st.session_state.comprehensive_ads = comprehensive_ads
@@ -3506,95 +3753,93 @@ def main():
         status_container = st.container()
         
         with status_container:
-            col1, col2, col3, col4, col5 = st.columns(5)
+            # Single row with 4 columns: Date range, merge ads, data source, generate button
+            col1, col2, col3, col4 = st.columns([1, 1, 1, 1])
             
             with col1:
-                st.caption("✅ Report generated successfully!")
-                # Display background task status if available
-                if hasattr(st.session_state, 'background_task_status'):
-                    st.caption(st.session_state.background_task_status)
-                # Display Google Doc success message if available
-                if hasattr(st.session_state, 'google_doc_success'):
-                    st.caption("✅ Google Doc created successfully!")
-                    del st.session_state.google_doc_success
-            
-            with col2:
                 st.caption(f"📅 Date Range: {config['date_from']} to {config['date_to']}")
             
-            with col3:
-                data_source_display = "Northbeam" if config['use_northbeam'] else "Meta"
-                st.caption(f"📊 Data Source: {data_source_display}")
-            
-            with col4:
+            with col2:
                 merge_status = "On" if config['merge_ads'] else "Off"
                 st.caption(f"🔗 Merge Ads: {merge_status}")
             
-            with col5:
+            with col3:
+                data_source_display = "Northbeam" if use_northbeam else "Meta"
+                data_source_color = "🟢" if use_northbeam else "🔵"
+                st.caption(f"{data_source_color} Data Source: {data_source_display}")
+            
+            with col4:
                 generate_doc_button = st.button("📄 Generate Google Doc", type="secondary")
         
-        # Handle Google Doc generation in col5
+        
+        # Handle Google Doc generation
         if generate_doc_button:
-            with col5:
-                with st.spinner("📄 Generating Google Doc..."):
-                    try:
-                        # Parse core products from user input
-                        core_products_list = []
-                        if core_products_input:
-                            for line in core_products_input.strip().split('\n'):
-                                if line.strip():
-                                    products = [p.strip() for p in line.split(',') if p.strip()]
-                                    if products:
-                                        core_products_list.append(products)
+            with st.spinner("📄 Generating Google Doc..."):
+                try:
+                    # Parse core products from user input
+                    core_products_list = []
+                    if core_products_input:
+                        for line in core_products_input.strip().split('\n'):
+                            if line.strip():
+                                products = [p.strip() for p in line.split(',') if p.strip()]
+                                if products:
+                                    core_products_list.append(products)
+                    
+                    # Generate markdown report using current UI values
+                    report_markdown = generate_markdown_report(
+                        st.session_state.comprehensive_ads, 
+                        date_from, 
+                        date_to, 
+                        top_n, 
+                        core_products_input, 
+                        merge_ads, 
+                        use_northbeam
+                    )
+                    
+                    # Format dates for filename
+                    date_from_formatted = date_from.replace('-', '')
+                    date_to_formatted = date_to.replace('-', '')
+                    
+                    # Determine data source for filename
+                    data_source = "northbeam" if use_northbeam else "meta"
+                    
+                    # Save markdown to file (always save locally for Google Drive upload)
+                    report_filename = f"campaign-reporting/reports/campaign_analysis/campaign_analysis_{data_source}_{date_from_formatted}-{date_to_formatted}.md"
+                    os.makedirs("campaign-reporting/reports/campaign_analysis", exist_ok=True)
+                    with open(report_filename, 'w') as f:
+                        f.write(report_markdown)
+                    
+                    # Save to S3
+                    s3_key = f"campaign-reporting/reports/campaign_analysis/campaign_analysis_{data_source}_{date_from_formatted}-{date_to_formatted}.md"
+                    save_file_to_s3(report_filename, s3_key)
+                    
+                    # Upload to Google Drive
+                    doc_title = f"Thrive Causemetics Campaign Analysis - {date_from} to {date_to}"
+                    shareable_link = export_report_to_google_doc(report_filename, doc_title)
+                    
+                    if shareable_link:
+                        # Set session state to show success message in main status area
+                        st.session_state.google_doc_success = True
+                        st.markdown(f"**Shareable Link:** {shareable_link}")
                         
-                        # Generate markdown report using current UI values
-                        report_markdown = generate_markdown_report(
-                            st.session_state.comprehensive_ads, 
-                            date_from, 
-                            date_to, 
-                            top_n, 
-                            core_products_input, 
-                            merge_ads, 
-                            use_northbeam
+                        # Add download button for local file
+                        with open(report_filename, 'r') as f:
+                            markdown_content = f.read()
+                        st.download_button(
+                            label="📥 Download Markdown Report",
+                            data=markdown_content,
+                            file_name=f"campaign_analysis_{data_source}_{date_from_formatted}-{date_to_formatted}.md",
+                            mime="text/markdown"
                         )
+                    else:
+                        st.warning("⚠️ Google Doc creation failed, but markdown report was saved locally")
+                        st.info(f"Local file: {report_filename}")
                         
-                        # Format dates for filename
-                        date_from_formatted = date_from.replace('-', '')
-                        date_to_formatted = date_to.replace('-', '')
-                        
-                        # Save markdown to file
-                        report_filename = f"reports/campaign_analysis_report_{date_from_formatted}-{date_to_formatted}.md"
-                        with open(report_filename, 'w') as f:
-                            f.write(report_markdown)
-                        
-                        # Upload to Google Drive
-                        doc_title = f"Thrive Causemetics Campaign Analysis - {date_from} to {date_to}"
-                        shareable_link = export_report_to_google_doc(report_filename, doc_title)
-                        
-                        if shareable_link:
-                            # Set session state to show success message in main status area
-                            st.session_state.google_doc_success = True
-                            st.markdown(f"**Shareable Link:** {shareable_link}")
-                            
-                            # Add download button for local file
-                            with open(report_filename, 'r') as f:
-                                markdown_content = f.read()
-                            st.download_button(
-                                label="📥 Download Markdown Report",
-                                data=markdown_content,
-                                file_name=f"campaign_analysis_report_{date_from_formatted}-{date_to_formatted}.md",
-                                mime="text/markdown"
-                            )
-                        else:
-                            st.warning("⚠️ Google Doc creation failed, but markdown report was saved locally")
-                            st.info(f"Local file: {report_filename}")
-                            
-                    except Exception as e:
-                        st.error(f"❌ Error generating Google Doc: {str(e)}")
-                        st.exception(e)
+                except Exception as e:
+                    st.error(f"❌ Error generating Google Doc: {str(e)}")
+                    st.exception(e)
         
-        st.markdown("---")
-        
-        # Create tabs
+        # Create tabs with minimal spacing
         tab1, tab2 = st.tabs(["📊 All Ads Summary", "🎯 Campaign Explorer"])
         
         with tab1:
@@ -3615,24 +3860,103 @@ def main():
         """)
         
 
+# Global cache for processed data to avoid repeated S3 calls
+_processed_data_cache = None
+
+def get_master_urls_filename():
+    """Generate master URLs filename with current date"""
+    current_date = datetime.now().strftime("%Y%m%d")
+    return f"campaign-reporting/processed/master_urls/master_urls_{current_date}.json"
+
+def get_processed_data_cache():
+    """Get cached processed data, loading from S3/local if needed"""
+    global _processed_data_cache
+    
+    # Return cached data if available
+    if _processed_data_cache is not None:
+        return _processed_data_cache
+    
+    try:
+        # Try to find the most recent master URLs file
+        try:
+            # List all master URLs files in S3
+            s3_client = get_s3_client()
+            response = s3_client.list_objects_v2(
+                Bucket=S3_BUCKET,
+                Prefix="processed/master_urls/master_urls_",
+                MaxKeys=100
+            )
+            
+            if 'Contents' in response:
+                # Sort by date (newest first)
+                files = sorted(
+                    [obj['Key'] for obj in response['Contents'] if obj['Key'].endswith('.json')],
+                    reverse=True
+                )
+                
+                if files:
+                    # Load the most recent file
+                    most_recent_key = files[0]
+                    try:
+                        processed_data = load_json_from_s3(most_recent_key)
+                        if processed_data:
+                            print(f"✅ Loaded most recent master URLs from S3: {most_recent_key}")
+                            _processed_data_cache = processed_data
+                            return processed_data
+                    except Exception as e:
+                        print(f"⚠️ Error loading most recent master URLs from S3: {e}")
+            
+        except Exception as e:
+            print(f"⚠️ Error listing master URLs files in S3: {e}")
+        
+        # Fallback to local files
+        try:
+            local_dir = "campaign-reporting/processed/master_urls"
+            if os.path.exists(local_dir):
+                files = [f for f in os.listdir(local_dir) if f.startswith("master_urls_") and f.endswith(".json")]
+                if files:
+                    # Sort by date (newest first)
+                    files.sort(reverse=True)
+                    most_recent_file = os.path.join(local_dir, files[0])
+                    with open(most_recent_file, 'r') as f:
+                        processed_data = json.load(f)
+                        print(f"✅ Loaded most recent master URLs locally: {most_recent_file}")
+                        _processed_data_cache = processed_data
+                        return processed_data
+        except Exception as e:
+            print(f"⚠️ Error loading local master URLs: {e}")
+        
+        return None
+        
+    except Exception as e:
+        print(f"Error loading processed data: {e}")
+        return None
+
+# Global flag to control whether to use cached files
+USE_CACHED_FILES = True
+
+def set_use_cached_files(value: bool):
+    """Set whether to use cached files for meta_insights and northbeam data"""
+    global USE_CACHED_FILES
+    USE_CACHED_FILES = value
+    print(f"🔄 Use cached files set to: {value}")
+
 def get_ad_url_from_processed(ad_id: str, ad_type: str = None) -> str:
     """
     Get URL from meta_adcreatives_processed.json based on ad_id and ad_type
     
     Args:
         ad_id: The ad ID to look up
-        ad_type: The ad type (video, static, carousel) - if None, will try to detect from ad name
+        ad_type: The ad type (video, static, carousel) - if None or "Unknown", will try all URL types
     
     Returns:
         URL string or empty string if not found
     """
     try:
-        processed_file = "reports/meta_adcreatives_processed.json"
-        if not os.path.exists(processed_file):
-            return ""
+        processed_data = get_processed_data_cache()
         
-        with open(processed_file, 'r') as f:
-            processed_data = json.load(f)
+        if processed_data is None:
+            return ""
         
         ad_id_str = str(ad_id)
         if ad_id_str not in processed_data:
@@ -3640,25 +3964,23 @@ def get_ad_url_from_processed(ad_id: str, ad_type: str = None) -> str:
         
         ad_data = processed_data[ad_id_str]
         
-        # If ad_type is not provided, return empty string
-        if ad_type is None:
-            return ""
+        # If ad_type is provided and not "Unknown", try specific URL types
+        if ad_type and ad_type.lower() != "unknown":
+            # For video ads, prefer permalink_url, then source_url
+            if ad_type.lower() in ["video", "carousel"]:
+                if ad_data.get("video_permalink_url"):
+                    return ad_data["video_permalink_url"]
+                elif ad_data.get("video_source_url"):
+                    return ad_data["video_source_url"]
+            
+            # For static/image ads, prefer image permalink_url, then image_url
+            elif ad_type.lower() in ["static", "image"]:
+                if ad_data.get("image_permalink_url"):
+                    return ad_data["image_permalink_url"]
+                elif ad_data.get("image_url"):
+                    return ad_data["image_url"]
         
-        # For video ads, prefer permalink_url, then source_url
-        if ad_type.lower() in ["video", "carousel"]:
-            if ad_data.get("video_permalink_url"):
-                return ad_data["video_permalink_url"]
-            elif ad_data.get("video_source_url"):
-                return ad_data["video_source_url"]
-        
-        # For static/image ads, prefer image permalink_url, then image_url
-        elif ad_type.lower() in ["static", "image"]:
-            if ad_data.get("image_permalink_url"):
-                return ad_data["image_permalink_url"]
-            elif ad_data.get("image_url"):
-                return ad_data["image_url"]
-        
-        # Fallback: try video URLs first, then image URLs
+        # Fallback: try all URL types in order of preference
         if ad_data.get("video_permalink_url"):
             return ad_data["video_permalink_url"]
         elif ad_data.get("video_source_url"):
