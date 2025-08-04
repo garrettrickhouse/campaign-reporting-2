@@ -694,22 +694,22 @@ def download_export_data(export_id, start_date, end_date):
         print(f"❌ S3 download failed: {e}")
         return None
 
-def fetch_northbeam_data():
+def fetch_northbeam_data(date_from=None, date_to=None):
     """Fetch Northbeam data for the specified date range"""
-    # Safety check for DATE_FROM and DATE_TO - if not set, raise error
-    if DATE_FROM is None or DATE_TO is None:
-        raise ValueError("DATE_FROM and DATE_TO must be set before calling fetch_northbeam_data")
+    # Safety check for date_from and date_to - if not set, raise error
+    if date_from is None or date_to is None:
+        raise ValueError("date_from and date_to must be provided to fetch_northbeam_data")
     
-    print(f"\n🔄 Fetching Northbeam data for {DATE_FROM} to {DATE_TO}...")
+    print(f"\n🔄 Fetching Northbeam data for {date_from} to {date_to}...")
     
     # Create export
-    export_id = create_northbeam_export(DATE_FROM, DATE_TO)
+    export_id = create_northbeam_export(date_from, date_to)
     if not export_id:
         print("❌ Failed to create Northbeam export")
         return None
     
     # Download data
-    df = download_export_data(export_id, DATE_FROM, DATE_TO)
+    df = download_export_data(export_id, date_from, date_to)
     if df is None:
         print("❌ Failed to download Northbeam data")
         return None
@@ -718,8 +718,8 @@ def fetch_northbeam_data():
     filtered_df = filter_attribution_data(df, ACCOUNTING_MODE_FILTER, NORTHBEAM_PLATFORM)
     
     # Save filtered data
-    date_from_formatted = format_date_for_filename(DATE_FROM)
-    date_to_formatted = format_date_for_filename(DATE_TO)
+    date_from_formatted = format_date_for_filename(date_from)
+    date_to_formatted = format_date_for_filename(date_to)
     
     # Save to S3
     s3_key = f"reports/northbeam_{date_from_formatted}-{date_to_formatted}.csv"
@@ -830,7 +830,7 @@ def fetch_all_data_sequentially(date_from=None, date_to=None):
     if northbeam_df is None:
         print("📊 STEP 2b: Fetching Northbeam data...")
         try:
-            northbeam_df = fetch_northbeam_data()
+            northbeam_df = fetch_northbeam_data(date_from, date_to)
             print(f"✅ Northbeam data fetched: {len(northbeam_df) if northbeam_df is not None else 0} rows")
         except Exception as e:
             print(f"❌ Error fetching Northbeam data: {e}")
