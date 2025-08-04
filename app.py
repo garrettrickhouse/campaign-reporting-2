@@ -25,8 +25,8 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # User Variables Config
-MERGE_ADS_WITH_SAME_NAME = True
-USE_NORTHBEAM_DATA = True  # Set to True to use Northbeam data for spend/revenue metrics
+# MERGE_ADS_WITH_SAME_NAME = True
+# USE_NORTHBEAM_DATA = True  # Set to True to use Northbeam data for spend/revenue metrics
 DOWNLOAD_REPORTS_LOCALLY = True  # Set to True to save all fetched/processed data locally (in addition to S3)
 # Note: When DOWNLOAD_REPORTS_LOCALLY = False, files are only saved to S3, saving disk space
 
@@ -2177,6 +2177,12 @@ st.markdown("""
         font-size: 0.9rem;
         color: #666;
     }
+    .metric-subtitle {
+        font-size: 0.8rem;
+        color: #888;
+        margin-top: 0.25rem;
+        font-style: italic;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -2192,14 +2198,24 @@ def format_roas(value):
     """Format ROAS value to 6 decimal places"""
     return f"{value:.6f}"
 
-def create_metric_card(label, value, format_func=str):
+def create_metric_card(label, value, format_func=str, subtitle=None):
     """Create a metric card with label and formatted value"""
+    subtitle_html = f'<div class="metric-subtitle">{subtitle}</div>' if subtitle else ""
     st.markdown(f"""
     <div class="metric-card">
         <div class="metric-label">{label}</div>
         <div class="metric-value">{format_func(value)}</div>
+        {subtitle_html}
     </div>
     """, unsafe_allow_html=True)
+
+def get_target_roas(campaign_type):
+    """Get target ROAS for a campaign type from CAMPAIGN_TYPES"""
+    for campaign_info in CAMPAIGN_TYPES:
+        if isinstance(campaign_info, list) and len(campaign_info) >= 2:
+            if campaign_info[0] == campaign_type:
+                return campaign_info[1]
+    return None
 
 # ===== GOOGLE DRIVE INTEGRATION =====
 
@@ -3224,7 +3240,10 @@ def display_campaign_explorer_tab(ad_objects, top_n=DEFAULT_TOP_N, core_products
                 create_metric_card("Total Spend", campaign_metrics['total_spend'], format_currency)
             
             with col2:
-                create_metric_card("ROAS", campaign_metrics['roas'], format_roas)
+                # Get target ROAS for this campaign type
+                target_roas = get_target_roas(campaign)
+                subtitle = f"(Target: {target_roas})" if target_roas is not None else None
+                create_metric_card("ROAS", campaign_metrics['roas'], format_roas, subtitle)
                 create_metric_card("CTR", campaign_metrics['ctr'], format_percentage)
             
             with col3:
