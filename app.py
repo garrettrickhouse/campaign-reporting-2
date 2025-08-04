@@ -770,6 +770,9 @@ def fetch_all_data_sequentially():
     
     print(f"\n🔍 STEP 1: CHECKING EXISTING DATA FILES...")
     
+    # Always fetch fresh data for new date ranges
+    print(f"🔄 Fetching fresh data for date range: {DATE_FROM} to {DATE_TO}")
+    
     # Check for existing data files
     # Safety check for DATE_FROM and DATE_TO
     if DATE_FROM is None or DATE_TO is None:
@@ -3282,6 +3285,23 @@ def main():
     if 'report_config' not in st.session_state:
         st.session_state.report_config = None
     
+    # Check if configuration has changed and clear cached data if needed
+    if st.session_state.comprehensive_ads and st.session_state.report_config:
+        config = st.session_state.report_config
+        config_changed = (
+            config.get('date_from') != date_from or
+            config.get('date_to') != date_to or
+            config.get('top_n') != top_n or
+            config.get('merge_ads') != merge_ads or
+            config.get('use_northbeam') != use_northbeam or
+            config.get('core_products_input') != core_products_input
+        )
+        
+        if config_changed:
+            st.session_state.comprehensive_ads = None
+            st.session_state.report_config = None
+            st.info("🔄 Configuration changed. Please click 'Generate Report' to fetch fresh data with the new settings.")
+    
     # Sidebar with configuration
     st.sidebar.header("⚙️ Configuration")
     
@@ -3340,6 +3360,14 @@ def main():
     
     with st.sidebar.form("generate_report"):
         generate_button = st.form_submit_button("🔄 Generate Report", type="primary")
+    
+    # Clear cached data button
+    if st.session_state.comprehensive_ads:
+        if st.sidebar.button("🗑️ Clear Cached Data", type="secondary"):
+            st.session_state.comprehensive_ads = None
+            st.session_state.report_config = None
+            st.sidebar.success("✅ Cached data cleared!")
+            st.rerun()
 
     # Main content area
     if generate_button:
@@ -3454,7 +3482,6 @@ def main():
                                 print(f"🎬 Starting background Meta ad creatives processing for {len(ad_ids)} ads...")
                                 
                                 # Get Meta API credentials from environment or config
-                                import os
                                 access_token = os.getenv('META_SYSTEM_USER_ACCESS_TOKEN')
                                 ad_account_id = os.getenv('META_AD_ACCOUNT_ID')
                                 page_id = os.getenv('META_PAGE_ID')  # Optional
@@ -3509,9 +3536,22 @@ def main():
                 st.exception(e)
     
     # Display report and Google Doc generation (using session state data)
-    if st.session_state.comprehensive_ads:
-        # Display context information in a clean, minimal layout
+    if st.session_state.comprehensive_ads and st.session_state.report_config:
+        # Check if cached data matches current date range
         config = st.session_state.report_config
+        current_date_from = date_from
+        current_date_to = date_to
+        
+        # Validate that cached data matches current date range
+        if (config.get('date_from') != current_date_from or 
+            config.get('date_to') != current_date_to):
+            # Clear cached data if date range doesn't match
+            st.session_state.comprehensive_ads = None
+            st.session_state.report_config = None
+            st.info("🔄 Date range changed. Please click 'Generate Report' to fetch fresh data for the new date range.")
+            return
+        
+        # Display context information in a clean, minimal layout
         col1, col2, col3, col4 = st.columns(4)
         
         with col1:
