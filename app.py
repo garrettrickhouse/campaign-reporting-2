@@ -123,45 +123,22 @@ def save_file_to_s3(file_path, s3_key):
         return False
 
 def save_json_to_s3(data, s3_key):
-    """Save JSON data directly to S3"""
-    try:
-        s3_client = get_s3_client()
-        s3_client.put_object(
-            Bucket=S3_BUCKET,
-            Key=s3_key,
-            Body=json.dumps(data, indent=2),
-            ContentType='application/json'
-        )
-        print(f"✅ Saved JSON to S3: s3://{S3_BUCKET}/{s3_key}")
-        return True
-    except Exception as e:
-        print(f"⚠️ S3 access denied or unavailable: {e}")
-        print(f"📁 Falling back to local storage only")
-        return False
+    """Save JSON data directly to S3 - DISABLED FOR NOW"""
+    # S3 uploads disabled - using local storage only
+    print(f"📁 S3 uploads disabled - using local storage only")
+    return False
 
 def load_json_from_s3(s3_key):
-    """Load JSON data from S3"""
-    try:
-        s3_client = get_s3_client()
-        response = s3_client.get_object(Bucket=S3_BUCKET, Key=s3_key)
-        data = json.loads(response['Body'].read().decode('utf-8'))
-        print(f"✅ Loaded JSON from S3: s3://{S3_BUCKET}/{s3_key}")
-        return data
-    except Exception as e:
-        print(f"⚠️ S3 access denied or unavailable: {e}")
-        print(f"📁 Falling back to local storage only")
-        return None
+    """Load JSON data from S3 - DISABLED FOR NOW"""
+    # S3 downloads disabled - using local storage only
+    print(f"📁 S3 downloads disabled - using local storage only")
+    return None
 
 def file_exists_in_s3(s3_key):
-    """Check if a file exists in S3"""
-    try:
-        s3_client = get_s3_client()
-        s3_client.head_object(Bucket=S3_BUCKET, Key=s3_key)
-        return True
-    except Exception as e:
-        print(f"⚠️ S3 access denied or unavailable: {e}")
-        print(f"📁 Falling back to local storage only")
-        return False
+    """Check if a file exists in S3 - DISABLED FOR NOW"""
+    # S3 checks disabled - using local storage only
+    print(f"📁 S3 checks disabled - using local storage only")
+    return False
 
 def is_s3_available():
     """Check if S3 is available and accessible"""
@@ -498,9 +475,9 @@ def fetch_meta_insights():
         date_from_formatted = format_date_for_filename(DATE_FROM)
         date_to_formatted = format_date_for_filename(DATE_TO)
         
-        # Save to S3
-        s3_key = f"reports/meta_insights_{date_from_formatted}-{date_to_formatted}.json"
-        save_json_to_s3(ads_list, s3_key)
+        # Save to S3 - DISABLED FOR NOW
+        # s3_key = f"reports/meta_insights_{date_from_formatted}-{date_to_formatted}.json"
+        # save_json_to_s3(ads_list, s3_key)
         
         # Also save locally for backward compatibility
         meta_json_filename = f"reports/meta_insights_{date_from_formatted}-{date_to_formatted}.json"
@@ -810,22 +787,8 @@ def fetch_all_data_sequentially():
     s3_meta_key = f"reports/meta_insights_{date_from_formatted}-{date_to_formatted}.json"
     s3_northbeam_key = f"reports/northbeam_{date_from_formatted}-{date_to_formatted}.csv"
     
-    # Try S3 first for Meta insights
-    if file_exists_in_s3(s3_meta_key):
-        try:
-            existing_files['meta_insights'] = load_json_from_s3(s3_meta_key)
-            print(f"✅ Found existing Meta insights in S3: {len(existing_files['meta_insights'])} ads")
-        except Exception as e:
-            print(f"⚠️ Error loading Meta insights from S3: {e}")
-            # Fallback to local file
-            if os.path.exists(meta_insights_file):
-                try:
-                    with open(meta_insights_file, 'r') as f:
-                        existing_files['meta_insights'] = json.load(f)
-                    print(f"✅ Found existing Meta insights locally: {len(existing_files['meta_insights'])} ads")
-                except Exception as e:
-                    print(f"⚠️ Error loading existing Meta insights: {e}")
-    elif os.path.exists(meta_insights_file):
+    # Check for local Meta insights file
+    if os.path.exists(meta_insights_file):
         try:
             with open(meta_insights_file, 'r') as f:
                 existing_files['meta_insights'] = json.load(f)
@@ -833,30 +796,8 @@ def fetch_all_data_sequentially():
         except Exception as e:
             print(f"⚠️ Error loading existing Meta insights: {e}")
     
-    # Try S3 first for Northbeam data
-    if file_exists_in_s3(s3_northbeam_key):
-        try:
-            s3_client = get_s3_client()
-            response = s3_client.get_object(Bucket=S3_BUCKET, Key=s3_northbeam_key)
-            existing_files['northbeam_data'] = pd.read_csv(
-                io.BytesIO(response['Body'].read()), 
-                dtype={'ad_id': str, 'campaign_id': str, 'adset_id': str}
-            )
-            print(f"✅ Found existing Northbeam data in S3: {len(existing_files['northbeam_data'])} rows")
-        except Exception as e:
-            print(f"⚠️ Error loading Northbeam data from S3: {e}")
-            # Fallback to local file
-            if os.path.exists(northbeam_file):
-                try:
-                    existing_files['northbeam_data'] = pd.read_csv(northbeam_file, dtype={
-                        'ad_id': str,
-                        'campaign_id': str,
-                        'adset_id': str
-                    })
-                    print(f"✅ Found existing Northbeam data locally: {len(existing_files['northbeam_data'])} rows")
-                except Exception as e:
-                    print(f"⚠️ Error loading existing Northbeam data: {e}")
-    elif os.path.exists(northbeam_file):
+    # Check for local Northbeam data file
+    if os.path.exists(northbeam_file):
         try:
             # Read CSV with specific dtype to ensure ID columns are treated as strings
             existing_files['northbeam_data'] = pd.read_csv(northbeam_file, dtype={
@@ -1403,9 +1344,9 @@ class MetaAdCreativesProcessor:
         """Save processed data"""
         filename = self.get_filename("processed", date_from, date_to)
         
-        # Save to S3
-        s3_key = f"reports/meta_adcreatives_processed.json"
-        save_json_to_s3(data, s3_key)
+        # Save to S3 - DISABLED FOR NOW
+        # s3_key = f"reports/meta_adcreatives_processed.json"
+        # save_json_to_s3(data, s3_key)
         
         # Also save locally for backward compatibility
         os.makedirs("reports", exist_ok=True)
@@ -1416,9 +1357,9 @@ class MetaAdCreativesProcessor:
         """Save raw adcreatives data (temporary)"""
         filename = self.get_filename("raw", date_from, date_to)
         
-        # Save to S3
-        s3_key = f"reports/meta_adcreatives_raw_{date_from.replace('-', '')}-{date_to.replace('-', '')}.json"
-        save_json_to_s3(data, s3_key)
+        # Save to S3 - DISABLED FOR NOW
+        # s3_key = f"reports/meta_adcreatives_raw_{date_from.replace('-', '')}-{date_to.replace('-', '')}.json"
+        # save_json_to_s3(data, s3_key)
         
         # Also save locally for backward compatibility
         os.makedirs("reports", exist_ok=True)
@@ -3450,9 +3391,9 @@ def main():
                 
                 # Save comprehensive ad objects to reports directory
                 if comprehensive_ads:
-                    # Save to S3
-                    s3_key = f"reports/comprehensive_ads_{date_from_formatted}-{date_to_formatted}.json"
-                    save_json_to_s3(comprehensive_ads, s3_key)
+                    # Save to S3 - DISABLED FOR NOW
+                    # s3_key = f"reports/comprehensive_ads_{date_from_formatted}-{date_to_formatted}.json"
+                    # save_json_to_s3(comprehensive_ads, s3_key)
                     
                     # Also save locally for backward compatibility
                     os.makedirs("reports", exist_ok=True)
