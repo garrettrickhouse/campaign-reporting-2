@@ -27,7 +27,7 @@ load_dotenv()
 # User Variables Config
 # MERGE_ADS_WITH_SAME_NAME = True
 # USE_NORTHBEAM_DATA = True  # Set to True to use Northbeam data for spend/revenue metrics
-DOWNLOAD_REPORTS_LOCALLY = True  # Set to True to save all fetched/processed data locally (in addition to S3)
+DOWNLOAD_REPORTS_LOCALLY = False  # Set to True to save all fetched/processed data locally (in addition to S3)
 # Note: When DOWNLOAD_REPORTS_LOCALLY = False, files are only saved to S3, saving disk space
 
 # Configuration - these will be set from frontend data
@@ -3482,8 +3482,9 @@ def main():
         date_to = st.text_input("To Date", value=DEFAULT_DATE_TO, key="date_to")
     
     st.sidebar.subheader("📊 Settings")
+    st.sidebar.info("⚠️ Please configure your data preferences below:")
     top_n = st.sidebar.number_input("Top N", min_value=1, max_value=50, value=DEFAULT_TOP_N, key="top_n")
-    merge_ads = st.sidebar.checkbox("Merge Ads with Same Name", value=DEFAULT_MERGE_ADS_WITH_SAME_NAME, key="merge_ads")
+    merge_ads = st.sidebar.checkbox("Merge Ads with Same Name", value=DEFAULT_MERGE_ADS_WITH_SAME_NAME, key="merge_ads", help="Combine ads with identical names and sum their metrics")
     use_northbeam = st.sidebar.checkbox(
         "Use Northbeam Data", 
         value=DEFAULT_USE_NORTHBEAM_DATA, 
