@@ -3509,7 +3509,7 @@ def main():
             return
         
         # Display context information in a clean, minimal layout
-        col1, col2, col3, col4 = st.columns(4)
+        col1, col2, col3, col4, col5 = st.columns(5)
         
         with col1:
             st.caption("✅ Report generated successfully!")
@@ -3528,6 +3528,56 @@ def main():
             merge_status = "On" if config['merge_ads'] else "Off"
             st.caption(f"🔗 Merge Ads: {merge_status}")
         
+        with col5:
+            generate_doc_button = st.button("📄 Generate Google Doc", type="secondary")
+            st.caption("Export to Google Drive")
+            
+            if generate_doc_button:
+                with st.spinner("📄 Generating Google Doc..."):
+                    try:
+                        # Generate markdown report
+                        report_markdown = generate_markdown_report(
+                            st.session_state.comprehensive_ads, 
+                            config['date_from'], 
+                            config['date_to'], 
+                            config['top_n'], 
+                            config['core_products_input'], 
+                            config['merge_ads'], 
+                            config['use_northbeam']
+                        )
+                        
+                        # Save markdown to file
+                        report_filename = f"reports/campaign_analysis_report_{config['date_from_formatted']}-{config['date_to_formatted']}.md"
+                        with open(report_filename, 'w') as f:
+                            f.write(report_markdown)
+                        
+                        st.success(f"✅ Markdown report generated: {report_filename}")
+                        
+                        # Upload to Google Drive
+                        doc_title = f"Thrive Causemetics Campaign Analysis - {config['date_from']} to {config['date_to']}"
+                        shareable_link = export_report_to_google_doc(report_filename, doc_title)
+                        
+                        if shareable_link:
+                            st.success("✅ Google Doc created successfully!")
+                            st.markdown(f"**Shareable Link:** {shareable_link}")
+                            
+                            # Add download button for local file
+                            with open(report_filename, 'r') as f:
+                                markdown_content = f.read()
+                            st.download_button(
+                                label="📥 Download Markdown Report",
+                                data=markdown_content,
+                                file_name=f"campaign_analysis_report_{config['date_from_formatted']}-{config['date_to_formatted']}.md",
+                                mime="text/markdown"
+                            )
+                        else:
+                            st.warning("⚠️ Google Doc creation failed, but markdown report was saved locally")
+                            st.info(f"Local file: {report_filename}")
+                            
+                    except Exception as e:
+                        st.error(f"❌ Error generating Google Doc: {str(e)}")
+                        st.exception(e)
+        
         st.markdown("---")
         
         # Create tabs
@@ -3538,63 +3588,6 @@ def main():
         
         with tab2:
             display_campaign_explorer_tab(st.session_state.comprehensive_ads, config['top_n'], config['core_products_input'])
-        
-        # Add Google Doc generation button
-        st.markdown("---")
-        st.subheader("📄 Export Report")
-        
-        col1, col2 = st.columns([1, 3])
-        with col1:
-            generate_doc_button = st.button("📄 Generate Google Doc", type="secondary")
-        
-        with col2:
-            st.caption("Generate a comprehensive markdown report and upload to Google Drive as a shareable Google Doc")
-        
-        if generate_doc_button:
-            with st.spinner("📄 Generating Google Doc..."):
-                try:
-                    # Generate markdown report
-                    report_markdown = generate_markdown_report(
-                        st.session_state.comprehensive_ads, 
-                        config['date_from'], 
-                        config['date_to'], 
-                        config['top_n'], 
-                        config['core_products_input'], 
-                        config['merge_ads'], 
-                        config['use_northbeam']
-                    )
-                    
-                    # Save markdown to file
-                    report_filename = f"reports/campaign_analysis_report_{config['date_from_formatted']}-{config['date_to_formatted']}.md"
-                    with open(report_filename, 'w') as f:
-                        f.write(report_markdown)
-                    
-                    st.success(f"✅ Markdown report generated: {report_filename}")
-                    
-                    # Upload to Google Drive
-                    doc_title = f"Thrive Causemetics Campaign Analysis - {config['date_from']} to {config['date_to']}"
-                    shareable_link = export_report_to_google_doc(report_filename, doc_title)
-                    
-                    if shareable_link:
-                        st.success("✅ Google Doc created successfully!")
-                        st.markdown(f"**Shareable Link:** {shareable_link}")
-                        
-                        # Add download button for local file
-                        with open(report_filename, 'r') as f:
-                            markdown_content = f.read()
-                        st.download_button(
-                            label="📥 Download Markdown Report",
-                            data=markdown_content,
-                            file_name=f"campaign_analysis_report_{config['date_from_formatted']}-{config['date_to_formatted']}.md",
-                            mime="text/markdown"
-                        )
-                    else:
-                        st.warning("⚠️ Google Doc creation failed, but markdown report was saved locally")
-                        st.info(f"Local file: {report_filename}")
-                        
-                except Exception as e:
-                    st.error(f"❌ Error generating Google Doc: {str(e)}")
-                    st.exception(e)
     
     else:
         # Welcome screen
