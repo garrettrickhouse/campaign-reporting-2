@@ -1923,7 +1923,7 @@ class MetaAdCreativesProcessor:
                     video_to_ads[video_id] = ad_id
                     # Update video_id to current attempt
                     processed_data[ad_id]["video_id"] = video_id
-                    print(f"🔄 Ad {ad_id}: Trying video priority {current_priority} (video_id: {video_id})")
+                    # print(f"🔄 Ad {ad_id}: Trying video priority {current_priority} (video_id: {video_id})")
                 else:
                     print(f"⚠️ Ad {ad_id}: No more video assets to try (current priority: {current_priority})")
             
@@ -3682,6 +3682,57 @@ def main():
     if 'report_config' not in st.session_state:
         st.session_state.report_config = None
     
+    # Try to load existing data from S3 if no data is currently loaded
+    if st.session_state.comprehensive_ads is None:
+        try:
+            # Look for the most recent comprehensive ads file in S3
+            s3_client = get_s3_client()
+            response = s3_client.list_objects_v2(
+                Bucket=S3_BUCKET,
+                Prefix="campaign-reporting/processed/comprehensive_ads/comprehensive_ads_",
+                MaxKeys=10
+            )
+            
+            if 'Contents' in response:
+                # Sort by date (newest first)
+                files = sorted(
+                    [obj['Key'] for obj in response['Contents'] if obj['Key'].endswith('.json')],
+                    reverse=True
+                )
+                
+                if files:
+                    # Load the most recent file
+                    most_recent_key = files[0]
+                    try:
+                        data = load_json_from_s3(most_recent_key)
+                        if data:
+                            # Extract date range from filename
+                            filename = most_recent_key.split('/')[-1]
+                            # Format: comprehensive_ads_YYYYMMDD-YYYYMMDD.json
+                            date_part = filename.replace('comprehensive_ads_', '').replace('.json', '')
+                            if '-' in date_part:
+                                date_from_loaded, date_to_loaded = date_part.split('-')
+                                # Convert to YYYY-MM-DD format
+                                date_from_formatted = f"{date_from_loaded[:4]}-{date_from_loaded[4:6]}-{date_from_loaded[6:8]}"
+                                date_to_formatted = f"{date_to_loaded[:4]}-{date_to_loaded[4:6]}-{date_to_loaded[6:8]}"
+                                
+                                st.session_state.comprehensive_ads = data
+                                st.session_state.report_config = {
+                                    'date_from': date_from_formatted,
+                                    'date_to': date_to_formatted,
+                                    'top_n': DEFAULT_TOP_N,
+                                    'core_products_input': "",
+                                    'merge_ads': DEFAULT_MERGE_ADS_WITH_SAME_NAME,
+                                    'use_northbeam': DEFAULT_USE_NORTHBEAM_DATA,
+                                    'date_from_formatted': date_from_loaded,
+                                    'date_to_formatted': date_to_loaded
+                                }
+                                st.success(f"✅ Loaded existing data from S3: {date_from_formatted} to {date_to_formatted}")
+                    except Exception as e:
+                        print(f"⚠️ Error loading existing data from S3: {e}")
+        except Exception as e:
+            print(f"⚠️ Error checking S3 for existing data: {e}")
+    
     # Sidebar with configuration
     st.sidebar.header("⚙️ Configuration")
     
@@ -3767,6 +3818,68 @@ def main():
     
     with st.sidebar.form("generate_report"):
         generate_button = st.form_submit_button("🔄 Generate Report", type="primary")
+    
+    # Load existing data button
+    if st.session_state.comprehensive_ads is None:
+        if st.sidebar.button("📥 Load Existing Data from S3", type="secondary"):
+            with st.spinner("🔄 Loading existing data from S3..."):
+                try:
+                    # Look for the most recent comprehensive ads file in S3
+                    s3_client = get_s3_client()
+                    response = s3_client.list_objects_v2(
+                        Bucket=S3_BUCKET,
+                        Prefix="campaign-reporting/processed/comprehensive_ads/comprehensive_ads_",
+                        MaxKeys=10
+                    )
+                    
+                    if 'Contents' in response:
+                        # Sort by date (newest first)
+                        files = sorted(
+                            [obj['Key'] for obj in response['Contents'] if obj['Key'].endswith('.json')],
+                            reverse=True
+                        )
+                        
+                        if files:
+                            # Load the most recent file
+                            most_recent_key = files[0]
+                            try:
+                                data = load_json_from_s3(most_recent_key)
+                                if data:
+                                    # Extract date range from filename
+                                    filename = most_recent_key.split('/')[-1]
+                                    # Format: comprehensive_ads_YYYYMMDD-YYYYMMDD.json
+                                    date_part = filename.replace('comprehensive_ads_', '').replace('.json', '')
+                                    if '-' in date_part:
+                                        date_from_loaded, date_to_loaded = date_part.split('-')
+                                        # Convert to YYYY-MM-DD format
+                                        date_from_formatted = f"{date_from_loaded[:4]}-{date_from_loaded[4:6]}-{date_from_loaded[6:8]}"
+                                        date_to_formatted = f"{date_to_loaded[:4]}-{date_to_loaded[4:6]}-{date_to_loaded[6:8]}"
+                                        
+                                        st.session_state.comprehensive_ads = data
+                                        st.session_state.report_config = {
+                                            'date_from': date_from_formatted,
+                                            'date_to': date_to_formatted,
+                                            'top_n': DEFAULT_TOP_N,
+                                            'core_products_input': "",
+                                            'merge_ads': DEFAULT_MERGE_ADS_WITH_SAME_NAME,
+                                            'use_northbeam': DEFAULT_USE_NORTHBEAM_DATA,
+                                            'date_from_formatted': date_from_loaded,
+                                            'date_to_formatted': date_to_loaded
+                                        }
+                                        st.success(f"✅ Loaded existing data from S3: {date_from_formatted} to {date_to_formatted}")
+                                        st.rerun()
+                                    else:
+                                        st.error("❌ Could not parse date range from filename")
+                                else:
+                                    st.error("❌ Failed to load data from S3")
+                            except Exception as e:
+                                st.error(f"❌ Error loading data from S3: {e}")
+                        else:
+                            st.error("❌ No comprehensive ads files found in S3")
+                    else:
+                        st.error("❌ No files found in S3 bucket")
+                except Exception as e:
+                    st.error(f"❌ Error accessing S3: {e}")
     
     # Simple status display
     if st.session_state.comprehensive_ads and st.session_state.report_config:
