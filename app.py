@@ -3242,23 +3242,6 @@ def main():
     if 'report_config' not in st.session_state:
         st.session_state.report_config = None
     
-    # Check if configuration has changed and clear cached data if needed
-    if st.session_state.comprehensive_ads and st.session_state.report_config:
-        config = st.session_state.report_config
-        config_changed = (
-            config.get('date_from') != date_from or
-            config.get('date_to') != date_to or
-            config.get('top_n') != top_n or
-            config.get('merge_ads') != merge_ads or
-            config.get('use_northbeam') != use_northbeam or
-            config.get('core_products_input') != core_products_input
-        )
-        
-        if config_changed:
-            st.session_state.comprehensive_ads = None
-            st.session_state.report_config = None
-            st.info("🔄 Configuration changed. Please click 'Generate Report' to fetch fresh data with the new settings.")
-    
     # Sidebar with configuration
     st.sidebar.header("⚙️ Configuration")
     
@@ -3274,10 +3257,6 @@ def main():
     top_n = st.sidebar.number_input("Top N", min_value=1, max_value=50, value=DEFAULT_TOP_N, key="top_n")
     merge_ads = st.sidebar.checkbox("Merge Ads with Same Name", value=DEFAULT_MERGE_ADS_WITH_SAME_NAME, key="merge_ads")
     use_northbeam = st.sidebar.checkbox("Use Northbeam Data", value=DEFAULT_USE_NORTHBEAM_DATA, key="use_northbeam")
-    
-
-    
-
     
     st.sidebar.subheader("📦 Core Products")
     
@@ -3296,17 +3275,28 @@ def main():
         help="To group product codes, separate codes with comma."
     )
     
+    # Check if configuration has changed and clear cached data if needed
+    if st.session_state.comprehensive_ads and st.session_state.report_config:
+        config = st.session_state.report_config
+        config_changed = (
+            config.get('date_from') != date_from or
+            config.get('date_to') != date_to or
+            config.get('top_n') != top_n or
+            config.get('merge_ads') != merge_ads or
+            config.get('use_northbeam') != use_northbeam or
+            config.get('core_products_input') != core_products_input
+        )
+        
+        if config_changed:
+            st.session_state.comprehensive_ads = None
+            st.session_state.report_config = None
+            st.info("🔄 Configuration changed. Please click 'Generate Report' to fetch fresh data with the new settings.")
     
-    # Parse and display core products count
-    core_products_count = 0
-    if core_products_input:
-        core_products_list = []
-        for line in core_products_input.strip().split('\n'):
-            if line.strip():
-                products = [p.strip() for p in line.split(',') if p.strip()]
-                if products:
-                    core_products_list.append(products)
-        core_products_count = len(core_products_list)
+
+    
+
+    
+
     
     
 
@@ -3535,26 +3525,39 @@ def main():
             if generate_doc_button:
                 with st.spinner("📄 Generating Google Doc..."):
                     try:
-                        # Generate markdown report
+                        # Parse core products from user input
+                        core_products_list = []
+                        if core_products_input:
+                            for line in core_products_input.strip().split('\n'):
+                                if line.strip():
+                                    products = [p.strip() for p in line.split(',') if p.strip()]
+                                    if products:
+                                        core_products_list.append(products)
+                        
+                        # Generate markdown report using current UI values
                         report_markdown = generate_markdown_report(
                             st.session_state.comprehensive_ads, 
-                            config['date_from'], 
-                            config['date_to'], 
-                            config['top_n'], 
-                            config['core_products_input'], 
-                            config['merge_ads'], 
-                            config['use_northbeam']
+                            date_from, 
+                            date_to, 
+                            top_n, 
+                            core_products_input, 
+                            merge_ads, 
+                            use_northbeam
                         )
                         
+                        # Format dates for filename
+                        date_from_formatted = date_from.replace('-', '')
+                        date_to_formatted = date_to.replace('-', '')
+                        
                         # Save markdown to file
-                        report_filename = f"reports/campaign_analysis_report_{config['date_from_formatted']}-{config['date_to_formatted']}.md"
+                        report_filename = f"reports/campaign_analysis_report_{date_from_formatted}-{date_to_formatted}.md"
                         with open(report_filename, 'w') as f:
                             f.write(report_markdown)
                         
                         st.success(f"✅ Markdown report generated: {report_filename}")
                         
                         # Upload to Google Drive
-                        doc_title = f"Thrive Causemetics Campaign Analysis - {config['date_from']} to {config['date_to']}"
+                        doc_title = f"Thrive Causemetics Campaign Analysis - {date_from} to {date_to}"
                         shareable_link = export_report_to_google_doc(report_filename, doc_title)
                         
                         if shareable_link:
@@ -3567,7 +3570,7 @@ def main():
                             st.download_button(
                                 label="📥 Download Markdown Report",
                                 data=markdown_content,
-                                file_name=f"campaign_analysis_report_{config['date_from_formatted']}-{config['date_to_formatted']}.md",
+                                file_name=f"campaign_analysis_report_{date_from_formatted}-{date_to_formatted}.md",
                                 mime="text/markdown"
                             )
                         else:
