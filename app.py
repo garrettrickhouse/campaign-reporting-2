@@ -3506,6 +3506,10 @@ def main():
             # Display background task status if available
             if hasattr(st.session_state, 'background_task_status'):
                 st.caption(st.session_state.background_task_status)
+            # Display Google Doc success message if available
+            if hasattr(st.session_state, 'google_doc_success'):
+                st.caption("✅ Google Doc created successfully!")
+                del st.session_state.google_doc_success
         
         with col2:
             st.caption(f"📅 Date Range: {config['date_from']} to {config['date_to']}")
@@ -3520,7 +3524,6 @@ def main():
         
         with col5:
             generate_doc_button = st.button("📄 Generate Google Doc", type="secondary")
-            st.caption("Export to Google Drive")
             
             if generate_doc_button:
                 with st.spinner("📄 Generating Google Doc..."):
@@ -3554,14 +3557,13 @@ def main():
                         with open(report_filename, 'w') as f:
                             f.write(report_markdown)
                         
-                        st.success(f"✅ Markdown report generated: {report_filename}")
-                        
                         # Upload to Google Drive
                         doc_title = f"Thrive Causemetics Campaign Analysis - {date_from} to {date_to}"
                         shareable_link = export_report_to_google_doc(report_filename, doc_title)
                         
                         if shareable_link:
-                            st.success("✅ Google Doc created successfully!")
+                            # Set session state to show success message in main status area
+                            st.session_state.google_doc_success = True
                             st.markdown(f"**Shareable Link:** {shareable_link}")
                             
                             # Add download button for local file
