@@ -16,11 +16,14 @@ import pandas as pd
 from googleapiclient.http import MediaFileUpload
 from googleapiclient.errors import HttpError
 
-# Import functions from main module
-from main import (
+# Import functions from app module
+from app import (
     calculate_campaign_metrics, get_metric_value, merge_ads_with_same_name,
     clean_nan_values, format_date_for_filename
 )
+
+# ===== CONFIGURATION & CONSTANTS =====
+CAMPAIGN_TYPES = [["Prospecting", 0.35], ["Prospecting+Remarketing", 0.69], ["Remarketing", 2.20]]
 
 # ===== GOOGLE API CONFIGURATION =====
 GOOGLE_CREDENTIALS_FILE = os.getenv('GOOGLE_CREDENTIALS_FILE', 'credentials/creative-audit-tool-aaa3858bf2cb.json')
@@ -338,10 +341,16 @@ def generate_markdown_report(ad_objects, date_from, date_to, top_n=5, core_produ
         # Campaign Analysis
         report += "\n## 📈 Campaign Analysis\n"
         
-        # Get available campaigns
-        campaigns = list(set([ad['metadata'].get('campaign_type', 'Unknown') for ad in ad_objects]))
-        campaigns = [c for c in campaigns if c != 'Unknown']
-        campaigns.sort()
+        # Use hard-coded campaign types from CAMPAIGN_TYPES
+        campaigns = []
+        for campaign_type in CAMPAIGN_TYPES:
+            if isinstance(campaign_type, list) and len(campaign_type) > 0:
+                campaigns.append(campaign_type[0])  # Use the first element (campaign name)
+            elif isinstance(campaign_type, str):
+                campaigns.append(campaign_type)
+        
+        # Filter out any empty or invalid campaign names
+        campaigns = [c for c in campaigns if c and c.strip()]
         
         # Get available products from configuration
         available_products = []
@@ -502,12 +511,51 @@ def generate_markdown_report(ad_objects, date_from, date_to, top_n=5, core_produ
         print("🔍 DEBUG: generate_markdown_report function completed")
 
 def load_comprehensive_ads(file_path):
-    """Load comprehensive ads from JSON file"""
+    """Load comprehensive ads from JSON file or S3"""
     try:
-        with open(file_path, 'r') as f:
-            comprehensive_ads = json.load(f)
-        print(f"✅ Loaded {len(comprehensive_ads)} ads from {file_path}")
-        return comprehensive_ads
+        # Try local file first
+        if os.path.exists(file_path):
+            with open(file_path, 'r') as f:
+                comprehensive_ads = json.load(f)
+            print(f"✅ Loaded {len(comprehensive_ads)} ads from local file: {file_path}")
+            return comprehensive_ads
+        
+        # Try S3 if local file doesn't exist
+        try:
+            import boto3
+            from dotenv import load_dotenv
+            load_dotenv()
+            
+            s3_bucket = os.getenv('S3_BUCKET')
+            aws_access_key_id = os.getenv('AWS_ACCESS_KEY_ID')
+            aws_secret_access_key = os.getenv('AWS_SECRET_ACCESS_KEY')
+            aws_region = 'us-east-1'
+            
+            if s3_bucket and aws_access_key_id and aws_secret_access_key:
+                s3_client = boto3.client(
+                    's3',
+                    aws_access_key_id=aws_access_key_id,
+                    aws_secret_access_key=aws_secret_access_key,
+                    region_name=aws_region
+                )
+                
+                            # Convert local path to S3 key
+            s3_key = file_path
+            # Handle both old and new file structures
+            if file_path.startswith('reports/') or file_path.startswith('processed/'):
+                s3_key = file_path
+                
+                response = s3_client.get_object(Bucket=s3_bucket, Key=s3_key)
+                comprehensive_ads = json.loads(response['Body'].read().decode('utf-8'))
+                print(f"✅ Loaded {len(comprehensive_ads)} ads from S3: s3://{s3_bucket}/{s3_key}")
+                return comprehensive_ads
+                
+        except Exception as s3_error:
+            print(f"⚠️ S3 loading failed: {s3_error}")
+        
+        print(f"❌ File not found locally or in S3: {file_path}")
+        return None
+        
     except Exception as e:
         print(f"❌ Error loading comprehensive ads from {file_path}: {e}")
         return None
@@ -518,7 +566,7 @@ def main():
     # Check if comprehensive ads file is provided as argument
     if len(sys.argv) < 2:
         print("Usage: python generate_google_doc.py <comprehensive_ads_file> [date_from] [date_to] [top_n]")
-        print("Example: python generate_google_doc.py reports/comprehensive_ads_20250630-20250701.json 2025-06-30 2025-07-01 5")
+        print("Example: python generate_google_doc.py campaign-reporting/processed/comprehensive_ads/comprehensive_ads_20250630-20250701.json 2025-06-30 2025-07-01 5")
         return
     
     comprehensive_file = sys.argv[1]
@@ -557,10 +605,11 @@ def main():
     # Save markdown to file
     date_from_formatted = date_from.replace('-', '')
     date_to_formatted = date_to.replace('-', '')
-    report_filename = f"reports/campaign_analysis_report_{date_from_formatted}-{date_to_formatted}.md"
+    data_source = "northbeam"  # Default to northbeam for this script
+    report_filename = f"campaign-reporting/reports/campaign_analysis/campaign_analysis_{data_source}_{date_from_formatted}-{date_to_formatted}.md"
     
     # Ensure reports directory exists
-    os.makedirs("reports", exist_ok=True)
+    os.makedirs("campaign-reporting/reports/campaign_analysis", exist_ok=True)
     
     with open(report_filename, 'w') as f:
         f.write(report_markdown)
