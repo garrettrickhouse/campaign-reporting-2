@@ -33,6 +33,7 @@ DATE_FROM = "2025-06-30" # Default start date
 DATE_TO = "2025-07-01" # Default end date
 TOP_N = 5
 CORE_PRODUCTS = [["LLEM", "Mascara"], ["BEB"], ["IWEL"], ["BrowGel"], ["LipTint"]]
+CAMPAIGN_TYPES = [["Prospecting", 0.35], ["Prospecting+Remarketing", 0.69], ["Remarketing", 2.20]]
 
 AGENCY_CODES = ["RHM", "NRTV"]
 AD_TYPE_KEYWORD_VIDEO = "e:video"
@@ -108,6 +109,54 @@ def get_s3_client():
         aws_secret_access_key=AWS_SECRET_ACCESS_KEY,
         region_name=AWS_REGION
     )
+
+def save_file_to_s3(file_path, s3_key):
+    """Save a local file to S3"""
+    try:
+        s3_client = get_s3_client()
+        s3_client.upload_file(file_path, S3_BUCKET, s3_key)
+        print(f"✅ Saved to S3: s3://{S3_BUCKET}/{s3_key}")
+        return True
+    except Exception as e:
+        print(f"❌ Failed to save to S3: {e}")
+        return False
+
+def save_json_to_s3(data, s3_key):
+    """Save JSON data directly to S3"""
+    try:
+        s3_client = get_s3_client()
+        s3_client.put_object(
+            Bucket=S3_BUCKET,
+            Key=s3_key,
+            Body=json.dumps(data, indent=2),
+            ContentType='application/json'
+        )
+        print(f"✅ Saved JSON to S3: s3://{S3_BUCKET}/{s3_key}")
+        return True
+    except Exception as e:
+        print(f"❌ Failed to save JSON to S3: {e}")
+        return False
+
+def load_json_from_s3(s3_key):
+    """Load JSON data from S3"""
+    try:
+        s3_client = get_s3_client()
+        response = s3_client.get_object(Bucket=S3_BUCKET, Key=s3_key)
+        data = json.loads(response['Body'].read().decode('utf-8'))
+        print(f"✅ Loaded JSON from S3: s3://{S3_BUCKET}/{s3_key}")
+        return data
+    except Exception as e:
+        print(f"❌ Failed to load JSON from S3: {e}")
+        return None
+
+def file_exists_in_s3(s3_key):
+    """Check if a file exists in S3"""
+    try:
+        s3_client = get_s3_client()
+        s3_client.head_object(Bucket=S3_BUCKET, Key=s3_key)
+        return True
+    except:
+        return False
 
 def create_session_with_retries():
     """Create a requests session with retry strategy"""
@@ -431,8 +480,14 @@ def fetch_meta_insights():
         
         date_from_formatted = format_date_for_filename(DATE_FROM)
         date_to_formatted = format_date_for_filename(DATE_TO)
-        meta_json_filename = f"reports/meta_insights_{date_from_formatted}-{date_to_formatted}.json"
         
+        # Save to S3
+        s3_key = f"reports/meta_insights_{date_from_formatted}-{date_to_formatted}.json"
+        save_json_to_s3(ads_list, s3_key)
+        
+        # Also save locally for backward compatibility
+        meta_json_filename = f"reports/meta_insights_{date_from_formatted}-{date_to_formatted}.json"
+        os.makedirs("reports", exist_ok=True)
         with open(meta_json_filename, 'w') as f:
             json.dump(ads_list, f, indent=2)
         print(f"💾 Saved raw Meta insights JSON: {meta_json_filename}")
@@ -671,7 +726,26 @@ def fetch_northbeam_data():
     # Save filtered data
     date_from_formatted = format_date_for_filename(DATE_FROM)
     date_to_formatted = format_date_for_filename(DATE_TO)
+    
+    # Save to S3
+    s3_key = f"reports/northbeam_{date_from_formatted}-{date_to_formatted}.csv"
+    csv_buffer = io.StringIO()
+    filtered_df.to_csv(csv_buffer, index=False)
+    try:
+        s3_client = get_s3_client()
+        s3_client.put_object(
+            Bucket=S3_BUCKET,
+            Key=s3_key,
+            Body=csv_buffer.getvalue(),
+            ContentType='text/csv'
+        )
+        print(f"✅ Saved Northbeam CSV to S3: s3://{S3_BUCKET}/{s3_key}")
+    except Exception as e:
+        print(f"❌ Failed to save Northbeam CSV to S3: {e}")
+    
+    # Also save locally for backward compatibility
     csv_filename = f"reports/northbeam_{date_from_formatted}-{date_to_formatted}.csv"
+    os.makedirs("reports", exist_ok=True)
     filtered_df.to_csv(csv_filename, index=False)
     print(f"💾 Saved Northbeam CSV: {csv_filename}")
     
@@ -712,16 +786,57 @@ def fetch_all_data_sequentially():
         'northbeam_data': None
     }
     
-    # Check which files exist
-    if os.path.exists(meta_insights_file):
+    # Check which files exist (S3 first, then local fallback)
+    s3_meta_key = f"reports/meta_insights_{date_from_formatted}-{date_to_formatted}.json"
+    s3_northbeam_key = f"reports/northbeam_{date_from_formatted}-{date_to_formatted}.csv"
+    
+    # Try S3 first for Meta insights
+    if file_exists_in_s3(s3_meta_key):
+        try:
+            existing_files['meta_insights'] = load_json_from_s3(s3_meta_key)
+            print(f"✅ Found existing Meta insights in S3: {len(existing_files['meta_insights'])} ads")
+        except Exception as e:
+            print(f"⚠️ Error loading Meta insights from S3: {e}")
+            # Fallback to local file
+            if os.path.exists(meta_insights_file):
+                try:
+                    with open(meta_insights_file, 'r') as f:
+                        existing_files['meta_insights'] = json.load(f)
+                    print(f"✅ Found existing Meta insights locally: {len(existing_files['meta_insights'])} ads")
+                except Exception as e:
+                    print(f"⚠️ Error loading existing Meta insights: {e}")
+    elif os.path.exists(meta_insights_file):
         try:
             with open(meta_insights_file, 'r') as f:
                 existing_files['meta_insights'] = json.load(f)
-            print(f"✅ Found existing Meta insights: {len(existing_files['meta_insights'])} ads")
+            print(f"✅ Found existing Meta insights locally: {len(existing_files['meta_insights'])} ads")
         except Exception as e:
             print(f"⚠️ Error loading existing Meta insights: {e}")
     
-    if os.path.exists(northbeam_file):
+    # Try S3 first for Northbeam data
+    if file_exists_in_s3(s3_northbeam_key):
+        try:
+            s3_client = get_s3_client()
+            response = s3_client.get_object(Bucket=S3_BUCKET, Key=s3_northbeam_key)
+            existing_files['northbeam_data'] = pd.read_csv(
+                io.BytesIO(response['Body'].read()), 
+                dtype={'ad_id': str, 'campaign_id': str, 'adset_id': str}
+            )
+            print(f"✅ Found existing Northbeam data in S3: {len(existing_files['northbeam_data'])} rows")
+        except Exception as e:
+            print(f"⚠️ Error loading Northbeam data from S3: {e}")
+            # Fallback to local file
+            if os.path.exists(northbeam_file):
+                try:
+                    existing_files['northbeam_data'] = pd.read_csv(northbeam_file, dtype={
+                        'ad_id': str,
+                        'campaign_id': str,
+                        'adset_id': str
+                    })
+                    print(f"✅ Found existing Northbeam data locally: {len(existing_files['northbeam_data'])} rows")
+                except Exception as e:
+                    print(f"⚠️ Error loading existing Northbeam data: {e}")
+    elif os.path.exists(northbeam_file):
         try:
             # Read CSV with specific dtype to ensure ID columns are treated as strings
             existing_files['northbeam_data'] = pd.read_csv(northbeam_file, dtype={
@@ -729,7 +844,7 @@ def fetch_all_data_sequentially():
                 'campaign_id': str,
                 'adset_id': str
             })
-            print(f"✅ Found existing Northbeam data: {len(existing_files['northbeam_data'])} rows")
+            print(f"✅ Found existing Northbeam data locally: {len(existing_files['northbeam_data'])} rows")
         except Exception as e:
             print(f"⚠️ Error loading existing Northbeam data: {e}")
     
@@ -1247,6 +1362,18 @@ class MetaAdCreativesProcessor:
     def load_processed_data(self, date_from: str = None, date_to: str = None) -> Dict:
         """Load existing processed data"""
         filename = self.get_filename("processed", date_from, date_to)
+        
+        # Try S3 first
+        s3_key = "reports/meta_adcreatives_processed.json"
+        if file_exists_in_s3(s3_key):
+            try:
+                data = load_json_from_s3(s3_key)
+                if data:
+                    return data
+            except Exception as e:
+                print(f"⚠️ Error loading processed data from S3: {e}")
+        
+        # Fallback to local file
         if os.path.exists(filename):
             with open(filename, 'r') as f:
                 return json.load(f)
@@ -1255,6 +1382,12 @@ class MetaAdCreativesProcessor:
     def save_processed_data(self, data: Dict, date_from: str = None, date_to: str = None):
         """Save processed data"""
         filename = self.get_filename("processed", date_from, date_to)
+        
+        # Save to S3
+        s3_key = f"reports/meta_adcreatives_processed.json"
+        save_json_to_s3(data, s3_key)
+        
+        # Also save locally for backward compatibility
         os.makedirs("reports", exist_ok=True)
         with open(filename, 'w') as f:
             json.dump(data, f, indent=2)
@@ -1262,6 +1395,12 @@ class MetaAdCreativesProcessor:
     def save_raw_data(self, data: Dict, date_from: str, date_to: str):
         """Save raw adcreatives data (temporary)"""
         filename = self.get_filename("raw", date_from, date_to)
+        
+        # Save to S3
+        s3_key = f"reports/meta_adcreatives_raw_{date_from.replace('-', '')}-{date_to.replace('-', '')}.json"
+        save_json_to_s3(data, s3_key)
+        
+        # Also save locally for backward compatibility
         os.makedirs("reports", exist_ok=True)
         with open(filename, 'w') as f:
             json.dump(data, f, indent=2)
@@ -1981,8 +2120,7 @@ def export_report_to_google_doc(report_file_path, doc_title="Thrive Causemetics 
 def generate_markdown_report(ad_objects, date_from, date_to, top_n, core_products_input, merge_ads, use_northbeam):
     """Generate comprehensive markdown report from ad objects"""
     
-    # Import main module to access configuration
-    import main
+
     
     # Get data source for display
     data_source_display = "Northbeam" if use_northbeam else "Meta"
@@ -2096,10 +2234,16 @@ def generate_markdown_report(ad_objects, date_from, date_to, top_n, core_product
     # Campaign Analysis
     report += "\n## 📈 Campaign Analysis\n"
     
-    # Get available campaigns
-    campaigns = list(set([ad['metadata'].get('campaign_type', 'Unknown') for ad in ad_objects]))
-    campaigns = [c for c in campaigns if c != 'Unknown']
-    campaigns.sort()
+    # Use hard-coded campaign types from CAMPAIGN_TYPES
+    campaigns = []
+    for campaign_type in CAMPAIGN_TYPES:
+        if isinstance(campaign_type, list) and len(campaign_type) > 0:
+            campaigns.append(campaign_type[0])  # Use the first element (campaign name)
+        elif isinstance(campaign_type, str):
+            campaigns.append(campaign_type)
+    
+    # Filter out any empty or invalid campaign names
+    campaigns = [c for c in campaigns if c and c.strip()]
     
     # Get available products from configuration
     available_products = []
@@ -2252,7 +2396,7 @@ def calculate_aggregated_metrics(ad_objects, group_by_field, top_n=10):
         return pd.DataFrame()
     
     # Debug: Print the current USE_NORTHBEAM_DATA setting
-    import main
+
     use_northbeam = getattr(main, 'USE_NORTHBEAM_DATA', True)
     data_source = 'northbeam' if use_northbeam else 'meta'
     
@@ -2324,7 +2468,7 @@ def display_summary_tab(ad_objects, top_n=DEFAULT_TOP_N):
     st.header("📊 Campaign Summary")
     
     # Debug: Print the current USE_NORTHBEAM_DATA setting
-    import main
+
     use_northbeam = getattr(main, 'USE_NORTHBEAM_DATA', True)
     
     # Overall metrics - use the correct data source based on USE_NORTHBEAM_DATA setting
@@ -2479,7 +2623,7 @@ def display_all_ads_tab(ad_objects):
     """Display the All Ads tab with comprehensive filtering and sorting capabilities"""
     
     # Debug: Print the current USE_NORTHBEAM_DATA setting
-    import main
+
     use_northbeam = getattr(main, 'USE_NORTHBEAM_DATA', True)
     
     st.header("📋 All Ads")
@@ -2843,13 +2987,19 @@ def display_campaign_explorer_tab(ad_objects, top_n=DEFAULT_TOP_N, core_products
     st.header("🎯 Campaign Explorer")
     
     # Debug: Print the current USE_NORTHBEAM_DATA setting
-    import main
+
     use_northbeam = getattr(main, 'USE_NORTHBEAM_DATA', True)
     
-    # Get available campaigns dynamically from data
-    campaigns = list(set([ad['metadata'].get('campaign_type', 'Unknown') for ad in ad_objects]))
-    campaigns = [c for c in campaigns if c != 'Unknown']
-    campaigns.sort()
+    # Use hard-coded campaign types from CAMPAIGN_TYPES
+    campaigns = []
+    for campaign_type in CAMPAIGN_TYPES:
+        if isinstance(campaign_type, list) and len(campaign_type) > 0:
+            campaigns.append(campaign_type[0])  # Use the first element (campaign name)
+        elif isinstance(campaign_type, str):
+            campaigns.append(campaign_type)
+    
+    # Filter out any empty or invalid campaign names
+    campaigns = [c for c in campaigns if c and c.strip()]
     
     # Get available products from frontend configuration
     available_products = []
@@ -3196,7 +3346,7 @@ def main():
         with st.spinner("🔄 Generating report..."):
             try:
                 # Temporarily update the global variables for this session
-                import main
+
                 main.DATE_FROM = date_from
                 main.DATE_TO = date_to
                 main.TOP_N = top_n
@@ -3255,6 +3405,12 @@ def main():
                 
                 # Save comprehensive ad objects to reports directory
                 if comprehensive_ads:
+                    # Save to S3
+                    s3_key = f"reports/comprehensive_ads_{date_from_formatted}-{date_to_formatted}.json"
+                    save_json_to_s3(comprehensive_ads, s3_key)
+                    
+                    # Also save locally for backward compatibility
+                    os.makedirs("reports", exist_ok=True)
                     with open(comprehensive_filename, 'w') as f:
                         json.dump(comprehensive_ads, f, indent=2)
                     
