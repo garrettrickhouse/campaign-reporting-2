@@ -845,7 +845,7 @@ def fetch_all_data_sequentially(date_from=None, date_to=None):
     return meta_insights, northbeam_df
 
 # ===== DATA PROCESSING FUNCTIONS =====
-def merge_data(northbeam_data, meta_data):
+def merge_data(northbeam_data, meta_data, date_from=None, date_to=None):
     """Merge Northbeam and Meta data into comprehensive ad objects"""
     print("Merging Northbeam and Meta data...")
     
@@ -903,8 +903,8 @@ def merge_data(northbeam_data, meta_data):
                 'agency': extract_agency_from_ad_name(ad_name)
             },
             'filters': {
-                'reporting_start_date': DATE_FROM,
-                'reporting_end_date': DATE_TO
+                'reporting_start_date': date_from,
+                'reporting_end_date': date_to
             },
             'metrics': {
                 'northbeam': {
@@ -3376,7 +3376,7 @@ def main():
                     return
                 
                 # Merge data into comprehensive objects
-                comprehensive_ads = merge_data(northbeam_df, meta_insights)
+                comprehensive_ads = merge_data(northbeam_df, meta_insights, date_from, date_to)
                 
                 # Merge ads with same name (if enabled)
                 if merge_ads:
