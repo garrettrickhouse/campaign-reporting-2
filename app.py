@@ -3482,9 +3482,8 @@ def main():
         date_to = st.text_input("To Date", value=DEFAULT_DATE_TO, key="date_to")
     
     st.sidebar.subheader("📊 Settings")
-    st.sidebar.info("⚠️ Please configure your data preferences below:")
     top_n = st.sidebar.number_input("Top N", min_value=1, max_value=50, value=DEFAULT_TOP_N, key="top_n")
-    merge_ads = st.sidebar.checkbox("Merge Ads with Same Name", value=DEFAULT_MERGE_ADS_WITH_SAME_NAME, key="merge_ads", help="Combine ads with identical names and sum their metrics")
+    merge_ads = st.sidebar.checkbox("Merge Ads with Same Name", value=DEFAULT_MERGE_ADS_WITH_SAME_NAME, key="merge_ads", help="Combine ads with identical names and aggregate their metrics")
     use_northbeam = st.sidebar.checkbox(
         "Use Northbeam Data", 
         value=DEFAULT_USE_NORTHBEAM_DATA, 
@@ -3557,27 +3556,10 @@ def main():
     with st.sidebar.form("generate_report"):
         generate_button = st.form_submit_button("🔄 Generate Report", type="primary")
     
-    # Display status updates below the generate button
+    # Simple status display
     if st.session_state.comprehensive_ads and st.session_state.report_config:
         st.sidebar.markdown("---")
-        st.sidebar.subheader("📊 Status")
-        
-        # Display success message
-        st.sidebar.success("✅ Report generated successfully!")
-        
-        # Display background task status if available
-        if hasattr(st.session_state, 'background_task_status'):
-            st.sidebar.info(st.session_state.background_task_status)
-        
-        # Display Google Doc success message if available
-        if hasattr(st.session_state, 'google_doc_success'):
-            st.sidebar.success("✅ Google Doc created successfully!")
-            del st.session_state.google_doc_success
-        
-        # Display merge status
-        config = st.session_state.report_config
-        merge_status = "On" if config['merge_ads'] else "Off"
-        st.sidebar.info(f"🔗 Merge Ads: {merge_status}")
+        st.sidebar.success("✅ Report ready! Explore the tabs below.")
     
 
 
@@ -3789,75 +3771,10 @@ def main():
                 st.caption(f"{data_source_color} Data Source: {data_source_display}")
             
             with col4:
-                generate_doc_button = st.button("📄 Generate Google Doc", type="secondary")
+                st.caption("📄 Export available after report generation")
         
         
-        # Handle Google Doc generation
-        if generate_doc_button:
-            with st.spinner("📄 Generating Google Doc..."):
-                try:
-                    # Parse core products from user input
-                    core_products_list = []
-                    if core_products_input:
-                        for line in core_products_input.strip().split('\n'):
-                            if line.strip():
-                                products = [p.strip() for p in line.split(',') if p.strip()]
-                                if products:
-                                    core_products_list.append(products)
-                    
-                    # Generate markdown report using current UI values
-                    report_markdown = generate_markdown_report(
-                        st.session_state.comprehensive_ads, 
-                        date_from, 
-                        date_to, 
-                        top_n, 
-                        core_products_input, 
-                        merge_ads, 
-                        use_northbeam
-                    )
-                    
-                    # Format dates for filename
-                    date_from_formatted = date_from.replace('-', '')
-                    date_to_formatted = date_to.replace('-', '')
-                    
-                    # Determine data source for filename
-                    data_source = "northbeam" if use_northbeam else "meta"
-                    
-                    # Save markdown to file (always save locally for Google Drive upload)
-                    report_filename = f"campaign-reporting/reports/campaign_analysis/campaign_analysis_{data_source}_{date_from_formatted}-{date_to_formatted}.md"
-                    os.makedirs("campaign-reporting/reports/campaign_analysis", exist_ok=True)
-                    with open(report_filename, 'w') as f:
-                        f.write(report_markdown)
-                    
-                    # Save to S3
-                    s3_key = f"campaign-reporting/reports/campaign_analysis/campaign_analysis_{data_source}_{date_from_formatted}-{date_to_formatted}.md"
-                    save_file_to_s3(report_filename, s3_key)
-                    
-                    # Upload to Google Drive
-                    doc_title = f"Thrive Causemetics Campaign Analysis - {date_from} to {date_to}"
-                    shareable_link = export_report_to_google_doc(report_filename, doc_title)
-                    
-                    if shareable_link:
-                        # Set session state to show success message in main status area
-                        st.session_state.google_doc_success = True
-                        st.markdown(f"**Shareable Link:** {shareable_link}")
-                        
-                        # Add download button for local file
-                        with open(report_filename, 'r') as f:
-                            markdown_content = f.read()
-                        st.download_button(
-                            label="📥 Download Markdown Report",
-                            data=markdown_content,
-                            file_name=f"campaign_analysis_{data_source}_{date_from_formatted}-{date_to_formatted}.md",
-                            mime="text/markdown"
-                        )
-                    else:
-                        st.warning("⚠️ Google Doc creation failed, but markdown report was saved locally")
-                        st.info(f"Local file: {report_filename}")
-                        
-                except Exception as e:
-                    st.error(f"❌ Error generating Google Doc: {str(e)}")
-                    st.exception(e)
+        # Export functionality can be added later if needed
         
         # Create tabs with minimal spacing
         tab1, tab2 = st.tabs(["📊 All Ads Summary", "🎯 Campaign Explorer"])
