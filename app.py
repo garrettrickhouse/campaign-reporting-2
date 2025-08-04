@@ -2685,6 +2685,8 @@ def display_summary_tab(ad_objects, top_n=DEFAULT_TOP_N):
     # Top N Ads table
     st.subheader(f"🏆 Top {top_n} Ads")
     
+    # Note: Background processing runs independently - links will appear automatically when ready
+    
     # Create ads dataframe
     ads_data = []
     
@@ -2698,11 +2700,9 @@ def display_summary_tab(ad_objects, top_n=DEFAULT_TOP_N):
     print(f"DEBUG: Processing {len(ad_list)} ads for display")
     
     for ad in ad_list:
-        # Get ad URL from processed data
-        ad_id = ad['ad_ids'].get('ad_id')
-        ad_type = ad['metadata'].get('ad_type')  # Use existing ad_type from comprehensive ad object
-        
-        link_url = get_ad_url_from_processed(ad_id, ad_type) if ad_id else ""
+        # Skip URL lookup initially to show data immediately
+        # Links will be populated later when background processing completes
+        link_url = ""
         
         ads_data.append({
             'Link': link_url,  # Will be empty if not found in processed file
@@ -2852,10 +2852,8 @@ def display_all_ads_tab(ad_objects):
                     roas_key = 'purchase_roas'
                 
                 # Get ad URL from processed data
-                ad_id = ad['ad_ids'].get('ad_id')
-                ad_type = ad['metadata'].get('ad_type')  # Use existing ad_type from comprehensive ad object
-                
-                link_url = get_ad_url_from_processed(ad_id, ad_type) if ad_id else ""
+                # Skip URL lookup initially to show data immediately
+                link_url = ""
                 
                 ads_data.append({
                     'Link': link_url,
@@ -3345,7 +3343,8 @@ def display_campaign_explorer_tab(ad_objects, top_n=DEFAULT_TOP_N, core_products
                         ad_id = ad['ad_ids'].get('ad_id')
                         ad_type = ad['metadata'].get('ad_type')  # Use existing ad_type from comprehensive ad object
                         
-                        link_url = get_ad_url_from_processed(ad_id, ad_type) if ad_id else ""
+                        # Skip URL lookup initially to show data immediately
+                        link_url = ""
 
                         ads_data.append({
                             'Link': link_url,
@@ -3607,7 +3606,8 @@ def display_product_creator_explorer_tab(ad_objects):
             ad_id = ad['ad_ids'].get('ad_id')
             ad_type = ad['metadata'].get('ad_type')
             
-            link_url = get_ad_url_from_processed(ad_id, ad_type) if ad_id else ""
+            # Skip URL lookup initially to show data immediately
+            link_url = ""
             
             ads_data.append({
                 'Link': link_url,
@@ -3827,6 +3827,9 @@ def main():
                 # Fetch data using the updated configuration
                 meta_insights, northbeam_df = fetch_all_data_sequentially(date_from, date_to)
                 
+                # Store meta_insights in session state for background processing
+                st.session_state.meta_insights = meta_insights
+                
                 # Apply filtering to Northbeam data if it exists
                 if northbeam_df is not None:
                     # Import the filtering function
@@ -3883,85 +3886,92 @@ def main():
                     if comprehensive_ads:
                         print(f"DEBUG: First ad sample: {comprehensive_ads[:3] if isinstance(comprehensive_ads, list) else list(comprehensive_ads.keys())[:3]}")
                     
-                    # Start background task for Meta ad creatives processing AFTER comprehensive_ads is created
-                    if meta_insights and len(meta_insights) > 0:
-                        try:
-                            # Extract ad IDs and types from meta insights
-                            ad_ids = []
-                            ad_types = {}
-                            
-                            for ad in meta_insights:
-                                ad_id = ad.get('ad_id')
-                                if ad_id:
-                                    ad_ids.append(str(ad_id))
-                                    # Extract ad type from ad name or use default
-                                    ad_name = ad.get('ad_name', '')
-                                    # Simple ad type detection from ad name
-                                    ad_type = 'unknown'
-                                    if 'video' in ad_name.lower():
-                                        ad_type = 'video'
-                                    elif 'static' in ad_name.lower():
-                                        ad_type = 'static'
-                                    elif 'carousel' in ad_name.lower():
-                                        ad_type = 'carousel'
-                                    ad_types[str(ad_id)] = ad_type
-                            
-                            if ad_ids:
-                                print(f"🎬 Starting background Meta ad creatives processing for {len(ad_ids)} ads...")
-                                
-                                # Get Meta API credentials from environment or config
-                                access_token = os.getenv('META_SYSTEM_USER_ACCESS_TOKEN')
-                                ad_account_id = os.getenv('META_AD_ACCOUNT_ID')
-                                page_id = os.getenv('META_PAGE_ID')  # Optional
-                                
-                                if access_token and ad_account_id:
-                                    # Start background processing
-                                    def background_process_creatives():
-                                        try:
-                                            processed_data = process_meta_ad_urls(
-                                                ad_ids=ad_ids,
-                                                ad_types=ad_types,
-                                                access_token=access_token,
-                                                ad_account_id=ad_account_id,
-                                                date_from=date_from,
-                                                date_to=date_to,
-                                                page_id=page_id
-                                            )
-                                            print(f"✅ Background Meta ad creatives processing completed: {len(processed_data)} ads processed")
-                                        except Exception as e:
-                                            print(f"❌ Background Meta ad creatives processing failed: {e}")
-                                    
-                                    # Start the background task
-                                    import threading
-                                    background_thread = threading.Thread(target=background_process_creatives)
-                                    background_thread.daemon = True
-                                    background_thread.start()
-                                    
-                                    print(f"🔄 Background Meta ad creatives processing started for {len(ad_ids)} ads")
-                                    
-                                    # Store background task status in session state
-                                    st.session_state.background_task_status = f"🎬 Background task started: Processing Meta ad creatives for {len(ad_ids)} ads"
-                                else:
-                                    print("⚠️ Meta API credentials not found. Skipping ad creatives processing.")
-                                    print("Set META_SYSTEM_USER_ACCESS_TOKEN and META_AD_ACCOUNT_ID environment variables to enable this feature.")
-                                    st.warning("⚠️ Meta API credentials not found. Set META_SYSTEM_USER_ACCESS_TOKEN and META_AD_ACCOUNT_ID environment variables to enable ad creatives processing.")
-                            else:
-                                print("⚠️ No ad IDs found in meta insights. Skipping ad creatives processing.")
-                                st.info("ℹ️ No ad IDs found in meta insights. Skipping ad creatives processing.")
-                            
-                        except Exception as e:
-                            print(f"❌ Error starting background Meta ad creatives processing: {e}")
-                            st.warning(f"⚠️ Background Meta ad creatives processing failed: {str(e)}")
-                            # Continue with main processing even if background task fails
-
                 if comprehensive_ads:
-                    pass  # Report generated successfully message will be shown in session state display
+                    st.success(f"✅ Report generated successfully! {len(comprehensive_ads)} ads processed.")
                 else:
                     st.error("❌ Failed to generate report. Please check the console for errors.")
                     
             except Exception as e:
                 st.error(f"❌ Error generating report: {str(e)}")
                 st.exception(e)
+    
+    # Start background task for Meta ad creatives processing AFTER comprehensive_ads is created
+    # This runs independently and doesn't block the main display
+    if generate_button and comprehensive_ads and 'meta_insights' in st.session_state and st.session_state.meta_insights and len(st.session_state.meta_insights) > 0:
+        try:
+            # Extract ad IDs and types from meta insights
+            ad_ids = []
+            ad_types = {}
+            
+            for ad in st.session_state.meta_insights:
+                ad_id = ad.get('ad_id')
+                if ad_id:
+                    ad_ids.append(str(ad_id))
+                    # Extract ad type from ad name or use default
+                    ad_name = ad.get('ad_name', '')
+                    # Simple ad type detection from ad name
+                    ad_type = 'unknown'
+                    if 'video' in ad_name.lower():
+                        ad_type = 'video'
+                    elif 'static' in ad_name.lower():
+                        ad_type = 'static'
+                    elif 'carousel' in ad_name.lower():
+                        ad_type = 'carousel'
+                    ad_types[str(ad_id)] = ad_type
+            
+            if ad_ids:
+                print(f"🎬 Starting background Meta ad creatives processing for {len(ad_ids)} ads...")
+                
+                # Get Meta API credentials from environment or config
+                access_token = os.getenv('META_SYSTEM_USER_ACCESS_TOKEN')
+                ad_account_id = os.getenv('META_AD_ACCOUNT_ID')
+                page_id = os.getenv('META_PAGE_ID')  # Optional
+                
+                if access_token and ad_account_id:
+                    # Start background processing
+                    def background_process_creatives():
+                        try:
+                            processed_data = process_meta_ad_urls(
+                                ad_ids=ad_ids,
+                                ad_types=ad_types,
+                                access_token=access_token,
+                                ad_account_id=ad_account_id,
+                                date_from=date_from,
+                                date_to=date_to,
+                                page_id=page_id
+                            )
+                            print(f"✅ Background Meta ad creatives processing completed: {len(processed_data)} ads processed")
+                            # Clear the background task status when complete
+                            if 'background_task_status' in st.session_state:
+                                del st.session_state.background_task_status
+                        except Exception as e:
+                            print(f"❌ Background Meta ad creatives processing failed: {e}")
+                            # Clear the background task status on error too
+                            if 'background_task_status' in st.session_state:
+                                del st.session_state.background_task_status
+                    
+                    # Start the background task
+                    import threading
+                    background_thread = threading.Thread(target=background_process_creatives)
+                    background_thread.daemon = True
+                    background_thread.start()
+                    
+                    print(f"🔄 Background Meta ad creatives processing started for {len(ad_ids)} ads")
+                    
+                    # Store background task status in session state
+                    st.session_state.background_task_status = f"🎬 Background task started: Processing Meta ad creatives for {len(ad_ids)} ads"
+                else:
+                    print("⚠️ Meta API credentials not found. Skipping ad creatives processing.")
+                    print("Set META_SYSTEM_USER_ACCESS_TOKEN and META_AD_ACCOUNT_ID environment variables to enable this feature.")
+                    st.warning("⚠️ Meta API credentials not found. Set META_SYSTEM_USER_ACCESS_TOKEN and META_AD_ACCOUNT_ID environment variables to enable ad creatives processing.")
+            else:
+                print("⚠️ No ad IDs found in meta insights. Skipping ad creatives processing.")
+                st.info("ℹ️ No ad IDs found in meta insights. Skipping ad creatives processing.")
+            
+        except Exception as e:
+            print(f"❌ Error starting background Meta ad creatives processing: {e}")
+            st.warning(f"⚠️ Background Meta ad creatives processing failed: {str(e)}")
+            # Continue with main processing even if background task fails
     
     # Display report and Google Doc generation (using session state data)
     if st.session_state.comprehensive_ads and st.session_state.report_config:
@@ -3983,7 +3993,7 @@ def main():
         status_container = st.container()
         
         with status_container:
-            # Single row with 4 columns: Date range, merge ads, data source, generate button
+            # Single row with 4 columns: Date range, merge ads, data source, background status
             col1, col2, col3, col4 = st.columns([1, 1, 1, 1])
             
             with col1:
@@ -3999,7 +4009,11 @@ def main():
                 st.caption(f"{data_source_color} Data Source: {data_source_display}")
             
             with col4:
-                st.caption("📄 Export available after report generation")
+                # Show background task status if available (minimal)
+                if 'background_task_status' in st.session_state:
+                    st.caption("🎬 Processing media URLs...")
+                else:
+                    st.caption("✅ Report ready")
         
         
         # Export functionality can be added later if needed
