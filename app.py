@@ -167,8 +167,9 @@ def is_s3_available():
     """Check if S3 is available and accessible"""
     try:
         s3_client = get_s3_client()
-        # Try a simple operation to test access
-        s3_client.head_bucket(Bucket=S3_BUCKET)
+        # Try a simple operation to test access - use list_objects instead of head_bucket
+        # as it requires fewer permissions
+        s3_client.list_objects_v2(Bucket=S3_BUCKET, MaxKeys=1)
         return True
     except Exception as e:
         print(f"⚠️ S3 not available: {e}")
@@ -809,11 +810,8 @@ def fetch_all_data_sequentially():
     s3_meta_key = f"reports/meta_insights_{date_from_formatted}-{date_to_formatted}.json"
     s3_northbeam_key = f"reports/northbeam_{date_from_formatted}-{date_to_formatted}.csv"
     
-    # Check S3 availability first
-    s3_available = is_s3_available()
-    
-    # Try S3 first for Meta insights (only if S3 is available)
-    if s3_available and file_exists_in_s3(s3_meta_key):
+    # Try S3 first for Meta insights
+    if file_exists_in_s3(s3_meta_key):
         try:
             existing_files['meta_insights'] = load_json_from_s3(s3_meta_key)
             print(f"✅ Found existing Meta insights in S3: {len(existing_files['meta_insights'])} ads")
@@ -835,8 +833,8 @@ def fetch_all_data_sequentially():
         except Exception as e:
             print(f"⚠️ Error loading existing Meta insights: {e}")
     
-    # Try S3 first for Northbeam data (only if S3 is available)
-    if s3_available and file_exists_in_s3(s3_northbeam_key):
+    # Try S3 first for Northbeam data
+    if file_exists_in_s3(s3_northbeam_key):
         try:
             s3_client = get_s3_client()
             response = s3_client.get_object(Bucket=S3_BUCKET, Key=s3_northbeam_key)
@@ -3452,12 +3450,9 @@ def main():
                 
                 # Save comprehensive ad objects to reports directory
                 if comprehensive_ads:
-                    # Save to S3 (only if available)
+                    # Save to S3
                     s3_key = f"reports/comprehensive_ads_{date_from_formatted}-{date_to_formatted}.json"
-                    if is_s3_available():
-                        save_json_to_s3(comprehensive_ads, s3_key)
-                    else:
-                        print("📁 S3 not available - saving locally only")
+                    save_json_to_s3(comprehensive_ads, s3_key)
                     
                     # Also save locally for backward compatibility
                     os.makedirs("reports", exist_ok=True)
