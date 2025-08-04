@@ -2177,11 +2177,9 @@ st.markdown("""
         font-size: 0.9rem;
         color: #666;
     }
-    .metric-subtitle {
-        font-size: 0.8rem;
-        color: #888;
-        margin-top: 0.25rem;
-        font-style: italic;
+    .metric-label {
+        font-size: 0.9rem;
+        color: #666;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -2200,12 +2198,14 @@ def format_roas(value):
 
 def create_metric_card(label, value, format_func=str, subtitle=None):
     """Create a metric card with label and formatted value"""
-    subtitle_html = f'<div class="metric-subtitle">{subtitle}</div>' if subtitle else ""
+    if subtitle:
+        title_html = f'{label} <span style="font-size: 0.8rem; color: #888; font-style: italic;">{subtitle}</span>'
+    else:
+        title_html = label
     st.markdown(f"""
     <div class="metric-card">
-        <div class="metric-label">{label}</div>
+        <div class="metric-label">{title_html}</div>
         <div class="metric-value">{format_func(value)}</div>
-        {subtitle_html}
     </div>
     """, unsafe_allow_html=True)
 
