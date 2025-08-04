@@ -1517,22 +1517,16 @@ class MetaAdCreativesProcessor:
             
             ad_data = processed_data[ad_id_str]
             
-            # Check if ad has any media URLs (excluding thumbnail)
-            has_video_urls = bool(ad_data.get("video_source_url") or ad_data.get("video_permalink_url"))
-            has_image_urls = bool(ad_data.get("image_url") or ad_data.get("image_permalink_url"))
+            # Check if we have priority tracking and haven't exhausted all attempts
+            current_priority = ad_data.get("priority", 0)
+            max_priority_attempts = ad_data.get("max_priority_attempts", 0)
             
-            # If no URLs found, check if we should try next priority index
-            if not has_video_urls and not has_image_urls:
-                # Check if we have priority tracking and haven't exhausted all attempts
-                current_priority = ad_data.get("priority", 0)
-                max_priority_attempts = ad_data.get("max_priority_attempts", 0)
-                
-                # If we haven't tracked max attempts yet, or if we have more to try
-                if max_priority_attempts == 0 or current_priority < max_priority_attempts - 1:
-                    missing_ads.append(ad_id_str)
-                # If we've exhausted all attempts, skip this ad
-                else:
-                    print(f"⚠️ Ad {ad_id_str} has exhausted all priority attempts ({max_priority_attempts} total)")
+            # If we haven't tracked max attempts yet, or if we have more to try
+            if max_priority_attempts == 0 or current_priority < max_priority_attempts - 1:
+                missing_ads.append(ad_id_str)
+            # If we've exhausted all attempts, skip this ad
+            else:
+                print(f"⚠️ Ad {ad_id_str} has exhausted all priority attempts ({max_priority_attempts} total)")
         
         return missing_ads
     
@@ -1938,6 +1932,9 @@ class MetaAdCreativesProcessor:
             for video_id, urls in video_urls.items():
                 if video_id in video_to_ads:
                     ad_id = video_to_ads[video_id]
+                    # Get current priority for this specific ad
+                    current_priority = processed_data[ad_id].get("priority", 0)
+                    
                     # Only update if URLs are missing or different
                     if not processed_data[ad_id].get("video_source_url") or processed_data[ad_id]["video_source_url"] != urls.get("source", ""):
                         processed_data[ad_id]["video_source_url"] = urls.get("source", "")
@@ -1979,6 +1976,9 @@ class MetaAdCreativesProcessor:
             for image_hash, urls in image_urls.items():
                 if image_hash in hash_to_ads:
                     ad_id = hash_to_ads[image_hash]
+                    # Get current priority for this specific ad
+                    current_priority = processed_data[ad_id].get("priority", 0)
+                    
                     # Only update if URLs are missing or different
                     if not processed_data[ad_id].get("image_url") or processed_data[ad_id]["image_url"] != urls.get("url", ""):
                         processed_data[ad_id]["image_url"] = urls.get("url", "")
@@ -3460,6 +3460,218 @@ def display_campaign_explorer_tab(ad_objects, top_n=DEFAULT_TOP_N, core_products
                     else:
                         st.info("No creator data available for the selected filters.")
 
+def display_product_creator_explorer_tab(ad_objects):
+    """Display the Product/Creator Explorer tab with filtering and metrics"""
+    st.header("🔍 Product/Creator Explorer")
+    
+    # Cache available filters in session state to avoid recomputation
+    if 'product_creator_available_filters' not in st.session_state:
+        st.session_state.product_creator_available_filters = get_available_filters(ad_objects)
+    
+    available_filters = st.session_state.product_creator_available_filters
+    products = available_filters['products']
+    creators = available_filters['creators']
+    
+    # Pre-compute all product and creator combinations for instant loading
+    if 'product_creator_all_combinations' not in st.session_state:
+        # Get all unique products and creators
+        all_products = set()
+        all_creators = set()
+        for ad in ad_objects:
+            all_products.add(ad['metadata'].get('product', 'Unknown'))
+            all_creators.add(ad['metadata'].get('creator', 'Unknown'))
+        
+        # Sort by count (highest to lowest)
+        product_counts = {}
+        creator_counts = {}
+        for ad in ad_objects:
+            product = ad['metadata'].get('product', 'Unknown')
+            creator = ad['metadata'].get('creator', 'Unknown')
+            product_counts[product] = product_counts.get(product, 0) + 1
+            creator_counts[creator] = creator_counts.get(creator, 0) + 1
+        
+        sorted_products = sorted(product_counts.items(), key=lambda x: x[1], reverse=True)
+        sorted_creators = sorted(creator_counts.items(), key=lambda x: x[1], reverse=True)
+        
+        # Pre-compute all combinations
+        combinations = {}
+        product_options = ["All Products"] + [product for product, count in sorted_products]
+        creator_options = ["All Creators"] + [creator for creator, count in sorted_creators]
+        
+        for product in product_options:
+            for creator in creator_options:
+                key = f"{product}_{creator}"
+                filtered_ads = []
+                for ad in ad_objects:
+                    product_match = product == "All Products" or ad['metadata'].get('product') == product
+                    creator_match = creator == "All Creators" or ad['metadata'].get('creator') == creator
+                    if product_match and creator_match:
+                        filtered_ads.append(ad)
+                combinations[key] = {
+                    'ads': filtered_ads,
+                    'product': product,
+                    'creator': creator,
+                    'product_count': product_counts.get(product, 0) if product != "All Products" else len(ad_objects),
+                    'creator_count': creator_counts.get(creator, 0) if creator != "All Creators" else len(ad_objects)
+                }
+        
+        st.session_state.product_creator_all_combinations = combinations
+        st.session_state.product_creator_product_options = product_options
+        st.session_state.product_creator_creator_options = creator_options
+    
+    # Create two side-by-side dropdowns for Product and Creator selection
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        selected_product = st.selectbox(
+            "📦 Select Product",
+            options=st.session_state.product_creator_product_options,
+            index=0,
+            key="product_creator_product_select",
+            help="Products ranked by total number of ads"
+        )
+    
+    with col2:
+        selected_creator = st.selectbox(
+            "👥 Select Creator",
+            options=st.session_state.product_creator_creator_options,
+            index=0,
+            key="product_creator_creator_select",
+            help="Creators ranked by total number of ads"
+        )
+    
+    # Get pre-computed filtered ads
+    filter_key = f"{selected_product}_{selected_creator}"
+    combination_data = st.session_state.product_creator_all_combinations[filter_key]
+    filtered_ads = combination_data['ads']
+    
+    # Calculate metrics for filtered ads
+    if filtered_ads:
+        # Calculate aggregated metrics
+        total_ads = len(filtered_ads)
+        total_spend = sum(get_metric_value(ad, 'spend') for ad in filtered_ads)
+        total_revenue = sum(get_metric_value(ad, 'attributed_rev') for ad in filtered_ads)
+        total_transactions = sum(get_metric_value(ad, 'transactions') for ad in filtered_ads)
+        total_impressions = sum(get_metric_value(ad, 'impressions') for ad in filtered_ads)
+        total_link_clicks = sum(get_metric_value(ad, 'meta_link_clicks') for ad in filtered_ads)
+        total_video_views = sum(get_metric_value(ad, 'meta_3s_video_views') for ad in filtered_ads)
+        
+        # Calculate derived metrics
+        roas = total_revenue / total_spend if total_spend > 0 else 0
+        ctr = (total_link_clicks / total_impressions * 100) if total_impressions > 0 else 0
+        cpm = (total_spend / total_impressions * 1000) if total_impressions > 0 else 0
+        thumbstop = (total_video_views / total_impressions * 100) if total_impressions > 0 else 0
+        aov = (total_revenue / total_transactions) if total_transactions > 0 else 0
+        
+        # Display metric cards
+        st.subheader("📊 Summary Metrics")
+        
+        col1, col2, col3, col4 = st.columns(4)
+        
+        with col1:
+            create_metric_card("Total Ads", total_ads)
+            create_metric_card("Total Spend", total_spend, format_currency)
+        
+        with col2:
+            create_metric_card("ROAS", roas, format_roas)
+            create_metric_card("CTR", ctr, format_percentage)
+        
+        with col3:
+            create_metric_card("CPM", cpm, format_currency)
+            create_metric_card("Thumbstop", thumbstop, format_percentage)
+        
+        with col4:
+            create_metric_card("AOV", aov, format_currency)
+            create_metric_card("Total Revenue", total_revenue, format_currency)
+        
+        st.markdown("---")
+        
+        # Display filtered ads table
+        st.subheader(f"📋 Ads Table ({len(filtered_ads)} ads)")
+        
+        # Create ads dataframe
+        ads_data = []
+        for ad in filtered_ads:
+            # Get ad URL from processed data
+            ad_id = ad['ad_ids'].get('ad_id')
+            ad_type = ad['metadata'].get('ad_type')
+            
+            link_url = get_ad_url_from_processed(ad_id, ad_type) if ad_id else ""
+            
+            ads_data.append({
+                'Link': link_url,
+                'Ad Name': ad['ad_ids']['ad_name'],
+                'Campaign Type': ad['metadata'].get('campaign_type', 'Unknown'),
+                'Product': ad['metadata'].get('product', 'Unknown'),
+                'Ad Type': ad['metadata'].get('ad_type', 'Unknown'),
+                'Creator': ad['metadata'].get('creator', 'Unknown'),
+                'Agency': ad['metadata'].get('agency', 'Unknown'),
+                'Spend': get_metric_value(ad, 'spend'),
+                'Revenue': get_metric_value(ad, 'attributed_rev'),
+                'Transactions': get_metric_value(ad, 'transactions'),
+                'Impressions': get_metric_value(ad, 'impressions'),
+                'Link Clicks': get_metric_value(ad, 'meta_link_clicks'),
+                'Video Views': get_metric_value(ad, 'meta_3s_video_views'),
+                'ROAS': get_metric_value(ad, 'roas'),
+                'CTR': (get_metric_value(ad, 'meta_link_clicks') / get_metric_value(ad, 'impressions') * 100) if get_metric_value(ad, 'impressions') > 0 else 0,
+                'CPM': (get_metric_value(ad, 'spend') / get_metric_value(ad, 'impressions') * 1000) if get_metric_value(ad, 'impressions') > 0 else 0,
+                'Thumbstop': (get_metric_value(ad, 'meta_3s_video_views') / get_metric_value(ad, 'impressions') * 100) if get_metric_value(ad, 'impressions') > 0 else 0,
+                'AOV': get_metric_value(ad, 'attributed_rev') / get_metric_value(ad, 'transactions') if get_metric_value(ad, 'transactions') > 0 else 0
+            })
+        
+        ads_df = pd.DataFrame(ads_data)
+        ads_df = ads_df.sort_values('Spend', ascending=False)
+        
+        # Format the display dataframe
+        display_df_formatted = ads_df.copy()
+        
+        if 'Spend' in display_df_formatted.columns:
+            display_df_formatted['Spend'] = display_df_formatted['Spend'].apply(format_currency)
+        if 'Revenue' in display_df_formatted.columns:
+            display_df_formatted['Revenue'] = display_df_formatted['Revenue'].apply(format_currency)
+        if 'ROAS' in display_df_formatted.columns:
+            display_df_formatted['ROAS'] = display_df_formatted['ROAS'].apply(lambda x: f"{x:.2f}")
+        if 'CTR' in display_df_formatted.columns:
+            display_df_formatted['CTR'] = display_df_formatted['CTR'].apply(lambda x: f"{x:.2f}%")
+        if 'CPM' in display_df_formatted.columns:
+            display_df_formatted['CPM'] = display_df_formatted['CPM'].apply(lambda x: f"${x:.2f}")
+        if 'Thumbstop' in display_df_formatted.columns:
+            display_df_formatted['Thumbstop'] = display_df_formatted['Thumbstop'].apply(lambda x: f"{x:.2f}%")
+        if 'AOV' in display_df_formatted.columns:
+            display_df_formatted['AOV'] = display_df_formatted['AOV'].apply(lambda x: f"${x:.2f}")
+        if 'Transactions' in display_df_formatted.columns:
+            display_df_formatted['Transactions'] = display_df_formatted['Transactions'].apply(lambda x: f"{x:,.0f}")
+        if 'Impressions' in display_df_formatted.columns:
+            display_df_formatted['Impressions'] = display_df_formatted['Impressions'].apply(lambda x: f"{x:,.0f}")
+        if 'Link Clicks' in display_df_formatted.columns:
+            display_df_formatted['Link Clicks'] = display_df_formatted['Link Clicks'].apply(lambda x: f"{x:,.0f}")
+        if 'Video Views' in display_df_formatted.columns:
+            display_df_formatted['Video Views'] = display_df_formatted['Video Views'].apply(lambda x: f"{x:,.0f}")
+        
+        st.dataframe(
+            display_df_formatted,
+            column_config={
+                "Link": st.column_config.LinkColumn(
+                    "Link",
+                    help="Click to view ad",
+                    display_text="🔗"
+                )
+            },
+            use_container_width=True
+        )
+        
+        # Download button
+        csv = ads_df.to_csv(index=False)
+        st.download_button(
+            label="📥 Download CSV",
+            data=csv,
+            file_name=f"product_creator_explorer_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+            mime="text/csv"
+        )
+        
+    else:
+        st.warning("⚠️ No ads found matching the selected filters. Please try different combinations.")
+
 def main():
     st.title("🎯 Campaign Reporting Dashboard")
     st.markdown("---")
@@ -3777,13 +3989,16 @@ def main():
         # Export functionality can be added later if needed
         
         # Create tabs with minimal spacing
-        tab1, tab2 = st.tabs(["📊 All Ads Summary", "🎯 Campaign Explorer"])
+        tab1, tab2, tab3 = st.tabs(["📊 All Ads Summary", "🎯 Campaign Explorer", "🔍 Product/Creator Explorer"])
         
         with tab1:
             display_summary_tab(st.session_state.comprehensive_ads, config['top_n'])
         
         with tab2:
             display_campaign_explorer_tab(st.session_state.comprehensive_ads, config['top_n'], config['core_products_input'])
+        
+        with tab3:
+            display_product_creator_explorer_tab(st.session_state.comprehensive_ads)
     
     else:
         # Welcome screen
