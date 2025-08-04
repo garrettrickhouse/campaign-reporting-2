@@ -29,12 +29,12 @@ MERGE_ADS_WITH_SAME_NAME = True
 USE_NORTHBEAM_DATA = True  # Set to True to use Northbeam data for spend/revenue metrics
 
 # Configuration - these will be set from frontend data
-DATE_FROM = "2025-06-30" # Default start date
-DATE_TO = "2025-07-01" # Default end date
-TOP_N = 5
-CORE_PRODUCTS = [["LLEM", "Mascara"], ["BEB"], ["IWEL"], ["BrowGel"], ["LipTint"]]
-CAMPAIGN_TYPES = [["Prospecting", 0.35], ["Prospecting+Remarketing", 0.69], ["Remarketing", 2.20]]
+# DATE_FROM = "2025-06-30" # Default start date
+# DATE_TO = "2025-07-01" # Default end date
+# TOP_N = 5
+# CORE_PRODUCTS = [["LLEM", "Mascara"], ["BEB"], ["IWEL"], ["BrowGel"], ["LipTint"]]
 
+CAMPAIGN_TYPES = [["Prospecting", 0.35], ["Prospecting+Remarketing", 0.69], ["Remarketing", 2.20]]
 AGENCY_CODES = ["RHM", "NRTV"]
 AD_TYPE_KEYWORD_VIDEO = "e:video"
 AD_TYPE_KEYWORD_STATIC = "e:static"
@@ -380,15 +380,15 @@ def extract_ad_metadata(ad_name, campaign_name, video_views_3s=0, video_keyword=
     }
 
 # ===== API FUNCTIONS =====
-def fetch_meta_insights():
+def fetch_meta_insights(date_from=None, date_to=None):
     """Fetch Meta insights data (raw data only)"""
         
-    # Get dynamic parameters using current global values
-    # Safety check for DATE_FROM and DATE_TO - if not set, raise error
-    if DATE_FROM is None or DATE_TO is None:
-        raise ValueError("DATE_FROM and DATE_TO must be set before calling fetch_meta_insights")
+    # Get dynamic parameters using provided values
+    # Safety check for date_from and date_to - if not set, raise error
+    if date_from is None or date_to is None:
+        raise ValueError("date_from and date_to must be provided to fetch_meta_insights")
     
-    meta_params = get_meta_params(DATE_FROM, DATE_TO)
+    meta_params = get_meta_params(date_from, date_to)
     
     ads_list = []
     next_url = META_ENDPOINT
@@ -468,12 +468,12 @@ def fetch_meta_insights():
     
     # Save raw meta insights immediately after fetching
     if ads_list:
-        # Safety check for DATE_FROM and DATE_TO
-        if DATE_FROM is None or DATE_TO is None:
-            raise ValueError("DATE_FROM and DATE_TO must be set before saving meta insights")
+        # Safety check for date_from and date_to
+        if date_from is None or date_to is None:
+            raise ValueError("date_from and date_to must be provided before saving meta insights")
         
-        date_from_formatted = format_date_for_filename(DATE_FROM)
-        date_to_formatted = format_date_for_filename(DATE_TO)
+        date_from_formatted = format_date_for_filename(date_from)
+        date_to_formatted = format_date_for_filename(date_to)
         
         # Save to S3 - DISABLED FOR NOW
         # s3_key = f"reports/meta_insights_{date_from_formatted}-{date_to_formatted}.json"
@@ -745,7 +745,7 @@ def fetch_northbeam_data():
     
     return filtered_df
 
-def fetch_all_data_sequentially():
+def fetch_all_data_sequentially(date_from=None, date_to=None):
     """
     Fetch all required data sequentially and return comprehensive ad objects.
     Process: Fetch Meta data → Save → Fetch Northbeam data → Save → Merge into comprehensive objects
@@ -756,24 +756,23 @@ def fetch_all_data_sequentially():
     
     # Print configuration
     print(f"\n🎯 CONFIGURATION:")
-    print(f"   - Date Range: {DATE_FROM} to {DATE_TO}")
+    print(f"   - Date Range: {date_from} to {date_to}")
     # Safety check for USE_NORTHBEAM_DATA
     use_northbeam = getattr(globals(), 'USE_NORTHBEAM_DATA', True)
     print(f"   - Data Source: {'Northbeam' if use_northbeam else 'Meta'}")
-    print(f"   - Top N: {TOP_N}")
     
     print(f"\n🔍 STEP 1: CHECKING EXISTING DATA FILES...")
     
     # Always fetch fresh data for new date ranges
-    print(f"🔄 Fetching fresh data for date range: {DATE_FROM} to {DATE_TO}")
+    print(f"🔄 Fetching fresh data for date range: {date_from} to {date_to}")
     
     # Check for existing data files
-    # Safety check for DATE_FROM and DATE_TO
-    if DATE_FROM is None or DATE_TO is None:
-        raise ValueError("DATE_FROM and DATE_TO must be set before checking existing files")
+    # Safety check for date_from and date_to
+    if date_from is None or date_to is None:
+        raise ValueError("date_from and date_to must be provided")
     
-    date_from_formatted = format_date_for_filename(DATE_FROM)
-    date_to_formatted = format_date_for_filename(DATE_TO)
+    date_from_formatted = format_date_for_filename(date_from)
+    date_to_formatted = format_date_for_filename(date_to)
     
     meta_insights_file = f"reports/meta_insights_{date_from_formatted}-{date_to_formatted}.json"
     northbeam_file = f"reports/northbeam_{date_from_formatted}-{date_to_formatted}.csv"
@@ -819,7 +818,7 @@ def fetch_all_data_sequentially():
     if meta_insights is None:
         print("📊 STEP 2a: Fetching Meta insights...")
         try:
-            meta_insights = fetch_meta_insights()
+            meta_insights = fetch_meta_insights(date_from, date_to)
             print(f"✅ Meta insights fetched: {len(meta_insights) if meta_insights else 0} ads")
         except Exception as e:
             print(f"❌ Error fetching Meta insights: {e}")
@@ -3364,7 +3363,7 @@ def main():
                 comprehensive_filename = f"reports/comprehensive_ads_{date_from_formatted}-{date_to_formatted}.json"
                 
                 # Fetch data using the updated configuration
-                meta_insights, northbeam_df = fetch_all_data_sequentially()
+                meta_insights, northbeam_df = fetch_all_data_sequentially(date_from, date_to)
                 
                 # Apply filtering to Northbeam data if it exists
                 if northbeam_df is not None:
