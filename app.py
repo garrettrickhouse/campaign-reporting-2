@@ -148,7 +148,7 @@ def load_json_from_s3(s3_key):
         s3_client = get_s3_client()
         response = s3_client.get_object(Bucket=S3_BUCKET, Key=s3_key)
         data = json.loads(response['Body'].read().decode('utf-8'))
-        print(f"✅ Loaded JSON from S3: s3://{S3_BUCKET}/{s3_key}")
+        # print(f"✅ Loaded JSON from S3: s3://{S3_BUCKET}/{s3_key}")
         return data
     except Exception as e:
         print(f"⚠️ S3 access denied or unavailable: {e}")
@@ -356,45 +356,45 @@ def extract_product_from_ad_name(ad_name):
         return "Unknown"
 
 def extract_creator_from_ad_name(ad_name):
-    """Extract creator from ad name (look for TH# patterns or fallback to first token after '_b:')"""
+    """Extract creator from ad name (first try simple _b: to -, then TH# patterns, then + fallback)"""
     try:
         if '_b:' in ad_name:
             start_index = ad_name.find('_b:') + 3
             
-            # Look for TH# patterns
+            # First option: Find the first dash after '_b:'
+            dash_index = ad_name.find('-', start_index)
+            if dash_index > start_index:
+                creator = ad_name[start_index:dash_index]
+                if creator.replace('-', '').replace('_', '').isalpha():
+                    return creator
+            
+            # Second option: Look for TH# patterns
             import re
             th_pattern = r'TH\d+'
             th_matches = re.findall(th_pattern, ad_name[start_index:])
             
             if th_matches:
-                # Found TH# patterns, extract creators between dashes after each TH#
-                creators = []
-                current_pos = start_index
-                
-                for th_match in th_matches:
-                    th_pos = ad_name.find(th_match, current_pos)
-                    if th_pos != -1:
-                        next_dash = ad_name.find('-', th_pos + len(th_match))
-                        if next_dash != -1:
-                            second_dash = ad_name.find('-', next_dash + 1)
-                            if second_dash != -1:
-                                creator = ad_name[next_dash + 1:second_dash]
-                                if creator.replace('-', '').replace('_', '').isalpha():
-                                    creators.append(creator)
-                            else:
-                                creator = ad_name[next_dash + 1:]
-                                if creator.replace('-', '').replace('_', '').isalpha():
-                                    creators.append(creator)
-                        current_pos = th_pos + len(th_match)
-                
-                if creators:
-                    return ", ".join(creators)
+                # Found TH# patterns, extract the first creator after the first TH#
+                first_th = th_matches[0]
+                th_pos = ad_name.find(first_th, start_index)
+                if th_pos != -1:
+                    next_dash = ad_name.find('-', th_pos + len(first_th))
+                    if next_dash != -1:
+                        second_dash = ad_name.find('-', next_dash + 1)
+                        if second_dash != -1:
+                            creator = ad_name[next_dash + 1:second_dash]
+                            if creator.replace('-', '').replace('_', '').isalpha():
+                                return creator
+                        else:
+                            creator = ad_name[next_dash + 1:]
+                            if creator.replace('-', '').replace('_', '').isalpha():
+                                return creator
             
-            # Fallback: Find the first dash after '_b:'
-            dash_index = ad_name.find('-', start_index)
-            if dash_index > start_index:
-                creator = ad_name[start_index:dash_index]
-                if creator.replace('-', '').replace('_', '').isalpha():
+            # Third option: If no dash found, try plus sign as fallback
+            plus_index = ad_name.find('+', start_index)
+            if plus_index > start_index:
+                creator = ad_name[start_index:plus_index]
+                if creator.replace('+', '').replace('_', '').isalpha():
                     return creator
         return "Unknown"
     except Exception as e:
@@ -566,11 +566,15 @@ def create_northbeam_export(start_date, end_date):
     
     url = f"{NORTHBEAM_BASE_URL}/exports/data-export"
     
+    start_datetime = f"{start_date}T00:00:00Z"
+    exclusive_end_date = datetime.strptime(end_date, '%Y-%m-%d') + timedelta(days=1)
+    end_datetime = exclusive_end_date.strftime('%Y-%m-%dT00:00:00Z')
+
     payload = {
         "period_type": "FIXED",
         "period_options": {
-            "period_starting_at": f"{start_date}T00:00:00Z",
-            "period_ending_at": f"{end_date}T00:00:00Z"
+            "period_starting_at": f"{start_datetime}",
+            "period_ending_at": f"{end_datetime}"
         },
         "attribution_options": {
             "attribution_models": [ATTRIBUTION_MODEL],
@@ -1081,8 +1085,18 @@ def get_metric_value(ad, metric_key, data_source='northbeam', default=0.0):
         result = float(value) if value != '' and value is not None else default
         return result
 
-def merge_ads_with_same_name(ad_objects):
-    """Merge ads with the same name and aggregate their metrics"""
+def merge_ads_with_same_name(ad_objects, merge_by_campaign_type=True):
+    """
+    Merge ads based on specified criteria and aggregate their metrics
+    
+    Args:
+        ad_objects: List of ad objects to merge
+        merge_by_campaign_type: If True, merge by campaign type AND ad name. 
+                               If False, merge by ad name only (regardless of campaign type)
+    
+    Returns:
+        List of merged ad objects
+    """
     
     merged_ads = {}
     ad_name_counts = {}  # Track how many ads have each name
@@ -1091,15 +1105,22 @@ def merge_ads_with_same_name(ad_objects):
         ad_name = ad['ad_ids']['ad_name']
         ad_id = ad['ad_ids']['ad_id']
         
+        # Create merge key based on requirements
+        if merge_by_campaign_type:
+            campaign_type = ad['metadata'].get('campaign_type', 'Unknown')
+            merge_key = f"{campaign_type}_{ad_name}"
+        else:
+            merge_key = ad_name
+        
         # Track ad name occurrences
         if ad_name not in ad_name_counts:
             ad_name_counts[ad_name] = []
         ad_name_counts[ad_name].append(ad_id)
         
         
-        if ad_name not in merged_ads:
+        if merge_key not in merged_ads:
             # Create a new merged ad object
-            merged_ads[ad_name] = {
+            merged_ads[merge_key] = {
                 'ad_ids': {
                     'ad_id': ad_id,  # Keep the first ad_id as primary
                     'ad_name': ad_name,
@@ -1111,6 +1132,10 @@ def merge_ads_with_same_name(ad_objects):
                 },
                 'metadata': ad['metadata'].copy(),
                 'filters': ad['filters'].copy(),
+                # Track all campaign types for merged ads
+                'campaign_types': [ad['metadata'].get('campaign_type', 'Unknown')],
+                # Track merge count
+                'merged_count': 1,
                 'metrics': {
                     'meta': {
                         'spend': float(ad['metrics']['meta']['spend']),
@@ -1143,27 +1168,35 @@ def merge_ads_with_same_name(ad_objects):
             }
         else:
             # Add this ad_id to the list of all ad IDs
-            merged_ads[ad_name]['ad_ids']['all_ad_ids'].append(ad_id)
+            merged_ads[merge_key]['ad_ids']['all_ad_ids'].append(ad_id)
+            
+            # Increment merge count
+            merged_ads[merge_key]['merged_count'] += 1
+            
+            # Track campaign types for merged ads
+            current_campaign_type = ad['metadata'].get('campaign_type', 'Unknown')
+            if current_campaign_type not in merged_ads[merge_key]['campaign_types']:
+                merged_ads[merge_key]['campaign_types'].append(current_campaign_type)
             
             # Aggregate metrics
             # Meta metrics
-            merged_ads[ad_name]['metrics']['meta']['spend'] += float(ad['metrics']['meta']['spend'])
-            merged_ads[ad_name]['metrics']['meta']['impressions'] += float(ad['metrics']['meta']['impressions'])
-            merged_ads[ad_name]['metrics']['meta']['link_clicks'] += float(ad['metrics']['meta']['link_clicks'])
-            merged_ads[ad_name]['metrics']['meta']['purchase_value'] += float(ad['metrics']['meta']['purchase_value'])
-            merged_ads[ad_name]['metrics']['meta']['purchase_count'] += float(ad['metrics']['meta']['purchase_count'])
-            merged_ads[ad_name]['metrics']['meta']['video_views_3s'] += float(ad['metrics']['meta']['video_views_3s'])
+            merged_ads[merge_key]['metrics']['meta']['spend'] += float(ad['metrics']['meta']['spend'])
+            merged_ads[merge_key]['metrics']['meta']['impressions'] += float(ad['metrics']['meta']['impressions'])
+            merged_ads[merge_key]['metrics']['meta']['link_clicks'] += float(ad['metrics']['meta']['link_clicks'])
+            merged_ads[merge_key]['metrics']['meta']['purchase_value'] += float(ad['metrics']['meta']['purchase_value'])
+            merged_ads[merge_key]['metrics']['meta']['purchase_count'] += float(ad['metrics']['meta']['purchase_count'])
+            merged_ads[merge_key]['metrics']['meta']['video_views_3s'] += float(ad['metrics']['meta']['video_views_3s'])
             
             # Northbeam metrics
-            merged_ads[ad_name]['metrics']['northbeam']['spend'] += safe_float_conversion(ad['metrics']['northbeam']['spend'])
-            merged_ads[ad_name]['metrics']['northbeam']['impressions'] += safe_float_conversion(ad['metrics']['northbeam']['impressions'])
-            merged_ads[ad_name]['metrics']['northbeam']['meta_link_clicks'] += safe_float_conversion(ad['metrics']['northbeam']['meta_link_clicks'])
-            merged_ads[ad_name]['metrics']['northbeam']['attributed_rev'] += safe_float_conversion(ad['metrics']['northbeam']['attributed_rev'])
-            merged_ads[ad_name]['metrics']['northbeam']['transactions'] += safe_float_conversion(ad['metrics']['northbeam']['transactions'])
-            merged_ads[ad_name]['metrics']['northbeam']['meta_3s_video_views'] += safe_float_conversion(ad['metrics']['northbeam']['meta_3s_video_views'])
+            merged_ads[merge_key]['metrics']['northbeam']['spend'] += safe_float_conversion(ad['metrics']['northbeam']['spend'])
+            merged_ads[merge_key]['metrics']['northbeam']['impressions'] += safe_float_conversion(ad['metrics']['northbeam']['impressions'])
+            merged_ads[merge_key]['metrics']['northbeam']['meta_link_clicks'] += safe_float_conversion(ad['metrics']['northbeam']['meta_link_clicks'])
+            merged_ads[merge_key]['metrics']['northbeam']['attributed_rev'] += safe_float_conversion(ad['metrics']['northbeam']['attributed_rev'])
+            merged_ads[merge_key]['metrics']['northbeam']['transactions'] += safe_float_conversion(ad['metrics']['northbeam']['transactions'])
+            merged_ads[merge_key]['metrics']['northbeam']['meta_3s_video_views'] += safe_float_conversion(ad['metrics']['northbeam']['meta_3s_video_views'])
     
     # Calculate aggregated ROAS for both data sources
-    for ad_name, merged_ad in merged_ads.items():
+    for merge_key, merged_ad in merged_ads.items():
         # Calculate Northbeam ROAS
         if merged_ad['metrics']['northbeam']['spend'] > 0:
             merged_ad['metrics']['northbeam']['roas'] = merged_ad['metrics']['northbeam']['attributed_rev'] / merged_ad['metrics']['northbeam']['spend']
@@ -1171,9 +1204,18 @@ def merge_ads_with_same_name(ad_objects):
         # Calculate Meta ROAS
         if merged_ad['metrics']['meta']['spend'] > 0:
             merged_ad['metrics']['meta']['purchase_roas'] = merged_ad['metrics']['meta']['purchase_value'] / merged_ad['metrics']['meta']['spend']
+        
+        # Update campaign type display for merged ads
+        if 'campaign_types' in merged_ad and len(merged_ad['campaign_types']) > 1:
+            # Sort campaign types alphabetically for consistent display
+            sorted_campaign_types = sorted(merged_ad['campaign_types'])
+            merged_ad['metadata']['campaign_type'] = ', '.join(sorted_campaign_types)
     
-    # Print merge statistics
-    print(f"✅ Merged {len(ad_objects) - len(merged_ads)} ads with same name ({len(ad_objects)} ➡️ {len(merged_ads)})")
+    # Print merge statistics with appropriate message
+    if merge_by_campaign_type:
+        print(f"✅ Merged {len(ad_objects) - len(merged_ads)} ads with same name and campaign type ({len(ad_objects)} ➡️ {len(merged_ads)})")
+    else:
+        print(f"✅ Merged {len(ad_objects) - len(merged_ads)} ads with same name regardless of campaign ({len(ad_objects)} ➡️ {len(merged_ads)})")
     
     result = list(merged_ads.values())
     return result
@@ -2141,8 +2183,8 @@ SCOPES = ['https://www.googleapis.com/auth/drive']
 GENERATE_GOOGLE_DOC = True  # Set to True to generate Google Doc from web display
 
 # Default configuration values - these will be overridden by frontend inputs
-DEFAULT_DATE_FROM = "2025-06-30"
-DEFAULT_DATE_TO = "2025-07-01"
+DEFAULT_DATE_FROM = "2025-06-01"
+DEFAULT_DATE_TO = "2025-06-01"
 DEFAULT_TOP_N = 5
 DEFAULT_CORE_PRODUCTS = [["LLEM", "Mascara"], ["BEB"], ["IWEL"], ["BrowGel"], ["LipTint"]]
 
@@ -2649,12 +2691,6 @@ def display_summary_tab(ad_objects, top_n=DEFAULT_TOP_N):
     """Display the summary tab with overall metrics and top N tables"""
     st.header("📊 Campaign Summary")
     
-    # Debug: Print the current USE_NORTHBEAM_DATA setting
-    print(f"DEBUG: display_summary_tab called with {len(ad_objects) if ad_objects else 0} ads")
-    print(f"DEBUG: ad_objects type: {type(ad_objects)}")
-    if ad_objects:
-        print(f"DEBUG: ad_objects keys sample: {list(ad_objects.keys())[:3] if isinstance(ad_objects, dict) else 'Not a dict'}")
-
     use_northbeam = getattr(main, 'USE_NORTHBEAM_DATA', True)
     
     # Overall metrics - use the correct data source based on USE_NORTHBEAM_DATA setting
@@ -2699,10 +2735,15 @@ def display_summary_tab(ad_objects, top_n=DEFAULT_TOP_N):
     
     print(f"DEBUG: Processing {len(ad_list)} ads for display")
     
-    for ad in ad_list:
-        # Skip URL lookup initially to show data immediately
-        # Links will be populated later when background processing completes
-        link_url = ""
+    # Merge ads with same name regardless of campaign for All Ads view
+    merged_ads = merge_ads_with_same_name(ad_list, merge_by_campaign_type=False)
+    print(f"DEBUG: After merging, {len(merged_ads)} unique ads")
+    
+    for ad in merged_ads:
+        # Get URL for the primary ad_id (first one in the merged group)
+        ad_id = ad['ad_ids'].get('ad_id', '')
+        ad_type = ad['metadata'].get('ad_type', 'Unknown')
+        link_url = get_ad_url(ad_id, ad_type) if ad_id else ""
         
         ads_data.append({
             'Link': link_url,  # Will be empty if not found in processed file
@@ -2712,6 +2753,7 @@ def display_summary_tab(ad_objects, top_n=DEFAULT_TOP_N):
             'Ad Type': ad['metadata'].get('ad_type', 'Unknown'),
             'Creator': ad['metadata'].get('creator', 'Unknown'),
             'Agency': ad['metadata'].get('agency', 'Unknown'),
+            'Merged Count': ad.get('merged_count', 1),  # Show how many ads were merged
             'Spend': get_metric_value(ad, 'spend'),
             'Revenue': get_metric_value(ad, 'attributed_rev'),
             'Transactions': get_metric_value(ad, 'transactions'),
@@ -2827,7 +2869,19 @@ def display_all_ads_tab(ad_objects):
     try:
         # Create the main dataframe with all ad data
         ads_data = []
-        for i, ad in enumerate(ad_objects):
+        
+        # Handle both dict and list formats
+        if isinstance(ad_objects, dict):
+            # Convert dict to list of ad objects
+            ad_list = list(ad_objects.values())
+        else:
+            ad_list = ad_objects
+        
+        # Merge ads with same name regardless of campaign for All Ads view
+        merged_ads = merge_ads_with_same_name(ad_list, merge_by_campaign_type=False)
+        print(f"DEBUG: After merging, {len(merged_ads)} unique ads")
+        
+        for i, ad in enumerate(merged_ads):
             try:
                 # Debug: Check which metrics source is being used
                 if use_northbeam:
@@ -2851,9 +2905,10 @@ def display_all_ads_tab(ad_objects):
                     video_views_key = 'video_views_3s'
                     roas_key = 'purchase_roas'
                 
-                # Get ad URL from processed data
-                # Skip URL lookup initially to show data immediately
-                link_url = ""
+                # Get ad URL from processed data (use primary ad_id from merged group)
+                ad_id = ad['ad_ids'].get('ad_id', '')
+                ad_type = ad['metadata'].get('ad_type', 'Unknown')
+                link_url = get_ad_url(ad_id, ad_type) if ad_id else ""
                 
                 ads_data.append({
                     'Link': link_url,
@@ -2863,6 +2918,7 @@ def display_all_ads_tab(ad_objects):
                     'Ad Type': ad['metadata'].get('ad_type', 'Unknown'),
                     'Creator': ad['metadata'].get('creator', 'Unknown'),
                     'Agency': ad['metadata'].get('agency', 'Unknown'),
+                    'Merged Count': ad.get('merged_count', 1),  # Show how many ads were merged
                     'Spend': metrics.get(spend_key, 0),
                     'Revenue': metrics.get(revenue_key, 0),
                     'Transactions': metrics.get(transactions_key, 0),
@@ -2961,7 +3017,7 @@ def display_all_ads_tab(ad_objects):
         
         st.subheader(f"📊 Creator Analysis ({len(grouped_df)} creators)")
         
-        # Display the dataframe with raw numbers for proper sorting
+        # Display the dataframe
         st.dataframe(grouped_df, use_container_width=True, height=400)
         
         # Download button
@@ -2998,7 +3054,7 @@ def display_all_ads_tab(ad_objects):
         
         st.subheader(f"📊 Product Analysis ({len(grouped_df)} products)")
         
-        # Display the dataframe with raw numbers for proper sorting
+        # Display the dataframe
         st.dataframe(grouped_df, use_container_width=True, height=400)
         
         # Download button
@@ -3702,13 +3758,13 @@ def main():
     st.sidebar.subheader("📅 Date Range")
     col1, col2 = st.sidebar.columns(2)
     with col1:
-        date_from = st.text_input("From Date", value=DEFAULT_DATE_FROM, key="date_from")
+        date_from = st.text_input("From", value=DEFAULT_DATE_FROM, key="date_from")
     with col2:
-        date_to = st.text_input("To Date", value=DEFAULT_DATE_TO, key="date_to")
+        date_to = st.text_input("To (inclusive)", value=DEFAULT_DATE_TO, key="date_to")
     
     st.sidebar.subheader("📊 Settings")
     top_n = st.sidebar.number_input("Top N", min_value=1, max_value=50, value=DEFAULT_TOP_N, key="top_n")
-    merge_ads = st.sidebar.checkbox("Merge Ads with Same Name", value=DEFAULT_MERGE_ADS_WITH_SAME_NAME, key="merge_ads", help="Combine ads with identical names and aggregate their metrics")
+    merge_ads = st.sidebar.checkbox("Merge Ads with Same Name", value=DEFAULT_MERGE_ADS_WITH_SAME_NAME, key="merge_ads", help="Combine ads with identical names and campaign types, aggregate their metrics")
     use_northbeam = st.sidebar.checkbox(
         "Use Northbeam Data", 
         value=DEFAULT_USE_NORTHBEAM_DATA, 
@@ -3846,7 +3902,7 @@ def main():
                 # Merge ads with same name (if enabled)
                 if merge_ads:
                     print(f"DEBUG: Applying merge_ads_with_same_name (merge_ads={merge_ads})")
-                    comprehensive_ads = merge_ads_with_same_name(comprehensive_ads)
+                    comprehensive_ads = merge_ads_with_same_name(comprehensive_ads, merge_by_campaign_type=True)
                 else:
                     print(f"DEBUG: Skipping merge (merge_ads={merge_ads})")
                 
@@ -4059,6 +4115,7 @@ def get_processed_data_cache():
     
     # Return cached data if available
     if _processed_data_cache is not None:
+        print(f"✅ Using cached processed data ({len(_processed_data_cache)} ads)")
         return _processed_data_cache
     
     try:
@@ -4068,7 +4125,7 @@ def get_processed_data_cache():
             s3_client = get_s3_client()
             response = s3_client.list_objects_v2(
                 Bucket=S3_BUCKET,
-                Prefix="processed/master_urls/master_urls_",
+                Prefix="campaign-reporting/processed/master_urls/master_urls_",
                 MaxKeys=100
             )
             
@@ -4111,6 +4168,7 @@ def get_processed_data_cache():
         except Exception as e:
             print(f"⚠️ Error loading local master URLs: {e}")
         
+        print("❌ No processed data found in S3 or local storage")
         return None
         
     except Exception as e:
@@ -4120,13 +4178,38 @@ def get_processed_data_cache():
 # Global flag to control whether to use cached files
 USE_CACHED_FILES = True
 
+# Global cache for processed data to avoid repeated S3 calls
+_PROCESSED_DATA_CACHE = None
+_CACHE_LOADED = False
+
 def set_use_cached_files(value: bool):
     """Set whether to use cached files for meta_insights and northbeam data"""
     global USE_CACHED_FILES
     USE_CACHED_FILES = value
     print(f"🔄 Use cached files set to: {value}")
 
-def get_ad_url_from_processed(ad_id: str, ad_type: str = None) -> str:
+def _get_cached_processed_data():
+    """Get cached processed data, loading it once if needed"""
+    global _PROCESSED_DATA_CACHE, _CACHE_LOADED
+    
+    if not _CACHE_LOADED:
+        _PROCESSED_DATA_CACHE = get_processed_data_cache()
+        _CACHE_LOADED = True
+        if _PROCESSED_DATA_CACHE:
+            print(f"✅ Loaded processed data cache ({len(_PROCESSED_DATA_CACHE)} ads)")
+        else:
+            print("⚠️ No processed data available")
+    
+    return _PROCESSED_DATA_CACHE
+
+def clear_processed_data_cache():
+    """Clear the processed data cache to force reload"""
+    global _PROCESSED_DATA_CACHE, _CACHE_LOADED
+    _PROCESSED_DATA_CACHE = None
+    _CACHE_LOADED = False
+    print("🔄 Cleared processed data cache")
+
+def get_ad_url(ad_id: str, ad_type: str = None) -> str:
     """
     Get URL from meta_adcreatives_processed.json based on ad_id and ad_type
     
@@ -4138,7 +4221,7 @@ def get_ad_url_from_processed(ad_id: str, ad_type: str = None) -> str:
         URL string or empty string if not found
     """
     try:
-        processed_data = get_processed_data_cache()
+        processed_data = _get_cached_processed_data()
         
         if processed_data is None:
             return ""
