@@ -27,7 +27,7 @@ load_dotenv()
 # User Variables Config
 # MERGE_ADS_WITH_SAME_NAME = True
 # USE_NORTHBEAM_DATA = True  # Set to True to use Northbeam data for spend/revenue metrics
-DOWNLOAD_REPORTS_LOCALLY = True  # Set to True to save all fetched/processed data locally (in addition to S3)
+DOWNLOAD_REPORTS_LOCALLY = False  # Set to True to save all fetched/processed data locally (in addition to S3)
 # Note: When DOWNLOAD_REPORTS_LOCALLY = False, files are only saved to S3, saving disk space
 
 # Configuration - these will be set from frontend data
@@ -1656,6 +1656,60 @@ class MetaAdCreativesProcessor:
         
         return raw_data
     
+    def update_thumbnails_for_existing_ads(self, raw_data: Dict, processed_data: Dict) -> Dict:
+        """Update video_thumbnail_url for existing ads that have raw data available"""
+        print(f"🖼️ Updating thumbnails for existing ads with raw data...")
+        
+        updated_count = 0
+        for ad_id, creative_data in raw_data.items():
+            if "error" in creative_data or "data" not in creative_data:
+                continue
+            
+            if not creative_data["data"]:
+                continue
+            
+            # Only update if ad exists in processed data and has empty video_thumbnail_url
+            if ad_id in processed_data and not processed_data[ad_id].get("video_thumbnail_url"):
+                creative = creative_data["data"][0]
+                
+                # Extract video thumbnail from asset feed (priority 1)
+                asset_feed = creative.get("asset_feed_spec", {})
+                videos = asset_feed.get("videos", [])
+                if videos:
+                    # Get priority 1 video (lowest priority number)
+                    customization_rules = asset_feed.get("asset_customization_rules", [])
+                    priority_map = {}
+                    
+                    for rule in customization_rules:
+                        video_label = rule.get("video_label", {})
+                        if video_label.get("id") and rule.get("priority"):
+                            priority_map[video_label["id"]] = rule["priority"]
+                    
+                    # Find video with priority 1
+                    priority_1_video = None
+                    for video in videos:
+                        adlabels = video.get("adlabels", [])
+                        label_id = adlabels[0].get("id") if adlabels else None
+                        priority = priority_map.get(label_id, 999) if label_id else 999
+                        
+                        if priority == 1:
+                            priority_1_video = video
+                            break
+                    
+                    # If no priority 1 found, use first video
+                    if not priority_1_video and videos:
+                        priority_1_video = videos[0]
+                    
+                    if priority_1_video:
+                        video_thumbnail_url = priority_1_video.get("thumbnail_url", "")
+                        if video_thumbnail_url:
+                            processed_data[ad_id]["video_thumbnail_url"] = video_thumbnail_url
+                            updated_count += 1
+                            print(f"✅ Updated video_thumbnail_url for ad {ad_id}")
+        
+        print(f"🖼️ Updated thumbnails for {updated_count} existing ads")
+        return processed_data
+    
     def add_thumbnails_to_processed(self, raw_data: Dict, processed_data: Dict, missing_ads: List[str]) -> Dict:
         """Step 4: Add missing ads to processed data with thumbnails"""
         print(f"🖼️ Adding thumbnails for {len(missing_ads)} ads...")
@@ -1881,7 +1935,7 @@ class MetaAdCreativesProcessor:
                                     "permalink": permalink_url,
                                     "thumbnail": thumbnail_url
                                 }
-                                print(f"🔍 Video {video_id}: source={bool(video_data.get('source'))}, permalink={bool(permalink_url)}")
+                                # print(f"🔍 Video {video_id}: source={bool(video_data.get('source'))}, permalink={bool(permalink_url)}")
                             except json.JSONDecodeError:
                                 continue
                 
@@ -2086,14 +2140,10 @@ class MetaAdCreativesProcessor:
                         # Check if we got URLs - if not, increment priority for next attempt
                         source_url = urls.get("source", "")
                         permalink_url = urls.get("permalink", "")
-                        print(f"🔍 DEBUG: Ad {ad_id} video URLs - source: '{source_url}', permalink: '{permalink_url}'")
                         
                         if not source_url and not permalink_url:
                             failed_ads.add(ad_id)
-                            print(f"🚨 Ad {ad_id} video priority {current_priority} failed")
-                        else:
-                            print(f"✅ Ad {ad_id}: Video priority {current_priority} succeeded with URLs: {urls}")
-                
+
                 # Handle failed video URL fetches (when video_urls is empty)
                 if not video_urls and video_ids:
                     print(f"🚨 All video URL fetches failed for {len(video_ids)} videos - marking ads as failed")
@@ -2123,14 +2173,11 @@ class MetaAdCreativesProcessor:
                         # Check if we got URLs - if not, mark as failed
                         image_url = urls.get("url", "")
                         permalink_url = urls.get("permalink", "")
-                        print(f"🔍 DEBUG: Ad {ad_id} image URLs - url: '{image_url}', permalink: '{permalink_url}'")
+                        # print(f"🔍 DEBUG: Ad {ad_id} image URLs - url: '{image_url}', permalink: '{permalink_url}'")
                         
                         if not image_url and not permalink_url:
                             failed_ads.add(ad_id)
-                            print(f"🚨 Ad {ad_id} image priority {current_priority} failed")
-                        else:
-                            print(f"✅ Ad {ad_id}: Image priority {current_priority} succeeded with URLs: {urls}")
-                
+                            
                 # Handle failed image URL fetches (when image_urls is empty)
                 if not image_urls and image_hashes:
                     print(f"🚨 All image URL fetches failed for {len(image_hashes)} images - marking ads as failed")
@@ -2138,13 +2185,13 @@ class MetaAdCreativesProcessor:
                         if image_hash in hash_to_ads:
                             ad_id = hash_to_ads[image_hash]
                             failed_ads.add(ad_id)
-                            print(f"🚨 Ad {ad_id} image priority failed (URL fetch failed)")
+                            # print(f"🚨 Ad {ad_id} image priority failed (URL fetch failed)")
             
             # Increment priority for all failed ads (only once per ad)
             for ad_id in failed_ads:
                 current_priority = processed_data[ad_id].get("priority", 0)
                 processed_data[ad_id]["priority"] = current_priority + 1
-                print(f"🚨 PRIORITY INCREMENT: Ad {ad_id} priority {current_priority} -> {current_priority + 1}")
+                # print(f"🚨 PRIORITY INCREMENT: Ad {ad_id} priority {current_priority} -> {current_priority + 1}")
                     
                     
         
@@ -2160,11 +2207,16 @@ class MetaAdCreativesProcessor:
         # Step 1: Load existing processed data
         processed_data = self.load_processed_data()  # No date parameters for evolving document
         
-        # Identify ads that need raw creative fetching (only new ads that don't exist in master_urls)
+        # Identify ads that need raw creative fetching
+        # Include new ads and existing ads that have empty video_thumbnail_url
         ads_for_raw_fetch = []
         for ad_id in ad_ids:
             ad_id_str = str(ad_id)
             if ad_id_str not in processed_data:
+                # New ad - needs raw data
+                ads_for_raw_fetch.append(ad_id_str)
+            elif not processed_data[ad_id_str].get("video_thumbnail_url"):
+                # Existing ad with empty video_thumbnail_url - needs raw data to update thumbnail
                 ads_for_raw_fetch.append(ad_id_str)
         
         print(f"📊 Found {len(ads_for_raw_fetch)} ads needing raw creative fetching")
@@ -2176,6 +2228,11 @@ class MetaAdCreativesProcessor:
             
             # Step 4: Add thumbnails to processed data for new ads
             processed_data = self.add_thumbnails_to_processed(raw_data, processed_data, ads_for_raw_fetch)
+        
+        # Step 4b: Update thumbnails for existing ads that have raw data available
+        # This handles cases where existing ads in master_urls don't have video_thumbnail_url
+        if raw_data:
+            processed_data = self.update_thumbnails_for_existing_ads(raw_data, processed_data)
         
         
         # Steps 5-6: Process media URLs by ad type (for ALL ads that need URL processing)
@@ -2199,12 +2256,6 @@ class MetaAdCreativesProcessor:
             if not (has_video_urls or has_image_urls) or (max_priority_attempts > 0 and current_priority < max_priority_attempts - 1):
                 ads_needing_urls.append(ad_id_str)
                 
-                # Debug: Log ads with no URLs but priority 0
-                if not (has_video_urls or has_image_urls) and current_priority == 0:
-                    print(f"🔍 DEBUG: Ad {ad_id_str} has no URLs but priority 0 - will be processed")
-                elif not (has_video_urls or has_image_urls) and current_priority > 0:
-                    print(f"🔍 DEBUG: Ad {ad_id_str} has no URLs and priority {current_priority} - will be processed")
-        
         if ads_needing_urls:
             print(f"🔄 Processing URLs for {len(ads_needing_urls)} ads (including existing ads with failed attempts)")
             
@@ -2283,8 +2334,8 @@ SCOPES = ['https://www.googleapis.com/auth/drive']
 GENERATE_GOOGLE_DOC = True  # Set to True to generate Google Doc from web display
 
 # Default configuration values - these will be overridden by frontend inputs
-DEFAULT_DATE_FROM = date.today().strftime("%Y-%m-%d")
-DEFAULT_DATE_TO = date.today().strftime("%Y-%m-%d")
+DEFAULT_DATE_FROM = (date.today() - timedelta(days=1)).strftime("%Y-%m-%d")
+DEFAULT_DATE_TO = (date.today() - timedelta(days=1)).strftime("%Y-%m-%d")
 DEFAULT_TOP_N = 5
 DEFAULT_CORE_PRODUCTS = [["LLEM", "Mascara"], ["BEB"], ["IWEL"], ["BrowGel"], ["LipTint"]]
 
@@ -2935,11 +2986,16 @@ def display_summary_tab(ad_objects, top_n=DEFAULT_TOP_N):
     if not products_df.empty:
         # Show top N products
         top_products_df = products_df.head(top_n)
-        st.dataframe(top_products_df, use_container_width=True)
+        # Capitalize the product column name
+        top_products_df_display = top_products_df.reset_index()
+        top_products_df_display.columns = ['Product'] + list(top_products_df_display.columns[1:])
+        st.dataframe(top_products_df_display, use_container_width=True, hide_index=True)
         
         # Show all products in expander
         with st.expander(f"📦 Show all {len(products_df)} products"):
-            st.dataframe(products_df, use_container_width=True)
+            all_products_df_display = products_df.reset_index()
+            all_products_df_display.columns = ['Product'] + list(all_products_df_display.columns[1:])
+            st.dataframe(all_products_df_display, use_container_width=True, hide_index=True)
     
     st.markdown("---")
     
@@ -2950,11 +3006,16 @@ def display_summary_tab(ad_objects, top_n=DEFAULT_TOP_N):
     if not creators_df.empty:
         # Show top N creators
         top_creators_df = creators_df.head(top_n)
-        st.dataframe(top_creators_df, use_container_width=True)
+        # Capitalize the creator column name
+        top_creators_df_display = top_creators_df.reset_index()
+        top_creators_df_display.columns = ['Creator'] + list(top_creators_df_display.columns[1:])
+        st.dataframe(top_creators_df_display, use_container_width=True, hide_index=True)
         
         # Show all creators in expander
         with st.expander(f"👥 Show all {len(creators_df)} creators"):
-            st.dataframe(creators_df, use_container_width=True)
+            all_creators_df_display = creators_df.reset_index()
+            all_creators_df_display.columns = ['Creator'] + list(all_creators_df_display.columns[1:])
+            st.dataframe(all_creators_df_display, use_container_width=True, hide_index=True)
     
     st.markdown("---")
     
@@ -2982,7 +3043,7 @@ def display_summary_tab(ad_objects, top_n=DEFAULT_TOP_N):
         display_agencies_df.columns = ['Agency', 'Spend', 'ROAS', 'CTR', 'CPM', 'Thumbstop', 'AOV']
         
         # The data is already sorted by calculate_aggregated_metrics, so we can use it directly
-        st.dataframe(display_agencies_df, use_container_width=True)
+        st.dataframe(display_agencies_df, use_container_width=True, hide_index=True)
 
 def display_all_ads_tab(ad_objects):
     """Display the All Ads tab with comprehensive filtering and sorting capabilities"""
@@ -3902,14 +3963,7 @@ def display_product_creator_explorer_tab(ad_objects):
             hide_index=True
         )
         
-        # Download button
-        csv = ads_df.to_csv(index=False)
-        st.download_button(
-            label="📥 Download CSV",
-            data=csv,
-            file_name=f"product_creator_explorer_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
-            mime="text/csv"
-        )
+
         
     else:
         st.warning("⚠️ No ads found matching the selected filters. Please try different combinations.")
@@ -4011,6 +4065,57 @@ def main():
     
     with st.sidebar.form("generate_report"):
         generate_button = st.form_submit_button("🔄 Generate Report", type="primary")
+    
+    # Status messages in sidebar
+    if 'background_task_status' in st.session_state:
+        st.sidebar.info("🎬 Processing media URLs...")
+    elif st.session_state.comprehensive_ads and st.session_state.report_config:
+        st.sidebar.success("✅ Report ready")
+    
+    # Google Doc Export (only show if report is available)
+    if st.session_state.comprehensive_ads and st.session_state.report_config:
+        st.sidebar.markdown("---")
+        st.sidebar.subheader("📄 Export Report")
+        
+        if st.sidebar.button("📄 Generate Google Doc", type="secondary"):
+            with st.sidebar.spinner("🔄 Generating Google Doc..."):
+                try:
+                    # Generate markdown report
+                    config = st.session_state.report_config
+                    markdown_content = generate_markdown_report(
+                        st.session_state.comprehensive_ads,
+                        config['date_from'],
+                        config['date_to'],
+                        config['top_n'],
+                        config['core_products_input'],
+                        config['merge_ads'],
+                        config['use_northbeam']
+                    )
+                    
+                    # Save markdown file temporarily
+                    date_from_formatted = config['date_from'].replace('-', '')
+                    date_to_formatted = config['date_to'].replace('-', '')
+                    report_filename = f"reports/campaign_analysis_report_{date_from_formatted}-{date_to_formatted}.md"
+                    
+                    # Ensure reports directory exists
+                    os.makedirs("reports", exist_ok=True)
+                    
+                    with open(report_filename, 'w') as f:
+                        f.write(markdown_content)
+                    
+                    # Export to Google Doc
+                    doc_title = f"Thrive Causemetics Campaign Analysis {config['date_from']} to {config['date_to']}"
+                    shareable_link = export_report_to_google_doc(report_filename, doc_title)
+                    
+                    if shareable_link:
+                        st.sidebar.success("✅ Google Doc created successfully!")
+                        st.sidebar.markdown(f"**📄 [View Google Doc]({shareable_link})**")
+                    else:
+                        st.sidebar.error("❌ Failed to create Google Doc")
+                        
+                except Exception as e:
+                    st.sidebar.error(f"❌ Error creating Google Doc: {str(e)}")
+                    st.sidebar.exception(e)
     
 
     
@@ -4214,8 +4319,8 @@ def main():
         status_container = st.container()
         
         with status_container:
-            # Single row with 4 columns: Date range, merge ads, data source, background status
-            col1, col2, col3, col4 = st.columns([1, 1, 1, 1])
+            # Single row with 3 columns: Date range, merge ads, data source
+            col1, col2, col3 = st.columns([1, 1, 1])
             
             with col1:
                 st.caption(f"📅 Date Range: {config['date_from']} to {config['date_to']}")
@@ -4228,13 +4333,6 @@ def main():
                 data_source_display = "Northbeam" if use_northbeam else "Meta"
                 data_source_color = "🟢" if use_northbeam else "🔵"
                 st.caption(f"{data_source_color} Data Source: {data_source_display}")
-            
-            with col4:
-                # Show background task status if available (minimal)
-                if 'background_task_status' in st.session_state:
-                    st.caption("🎬 Processing media URLs...")
-                else:
-                    st.caption("✅ Report ready")
         
         
         # Export functionality can be added later if needed
@@ -4312,22 +4410,25 @@ def get_processed_data_cache():
         except Exception as e:
             print(f"⚠️ Error listing master URLs files in S3: {e}")
         
-        # Fallback to local files
-        try:
-            local_dir = "campaign-reporting/processed/master_urls"
-            if os.path.exists(local_dir):
-                files = [f for f in os.listdir(local_dir) if f.startswith("master_urls_") and f.endswith(".json")]
-                if files:
-                    # Sort by date (newest first)
-                    files.sort(reverse=True)
-                    most_recent_file = os.path.join(local_dir, files[0])
-                    with open(most_recent_file, 'r') as f:
-                        processed_data = json.load(f)
-                        print(f"✅ Loaded most recent master URLs locally: {most_recent_file}")
-                        _processed_data_cache = processed_data
-                        return processed_data
-        except Exception as e:
-            print(f"⚠️ Error loading local master URLs: {e}")
+        # Fallback to local files (only if DOWNLOAD_REPORTS_LOCALLY is True)
+        if DOWNLOAD_REPORTS_LOCALLY:
+            try:
+                local_dir = "campaign-reporting/processed/master_urls"
+                if os.path.exists(local_dir):
+                    files = [f for f in os.listdir(local_dir) if f.startswith("master_urls_") and f.endswith(".json")]
+                    if files:
+                        # Sort by date (newest first)
+                        files.sort(reverse=True)
+                        most_recent_file = os.path.join(local_dir, files[0])
+                        with open(most_recent_file, 'r') as f:
+                            processed_data = json.load(f)
+                            print(f"✅ Loaded most recent master URLs locally: {most_recent_file}")
+                            _processed_data_cache = processed_data
+                            return processed_data
+            except Exception as e:
+                print(f"⚠️ Error loading local master URLs: {e}")
+        else:
+            print("📁 Skipping local file lookup (DOWNLOAD_REPORTS_LOCALLY = False)")
         
         print("❌ No processed data found in S3 or local storage")
         return None
