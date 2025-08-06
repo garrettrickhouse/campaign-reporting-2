@@ -4030,25 +4030,34 @@ def main():
     
     # Check if configuration has changed and clear cached data if needed
     if st.session_state.comprehensive_ads and st.session_state.report_config:
-        config = st.session_state.report_config
-        # Check if configuration has changed (excluding use_northbeam for instant switching)
-        config_changed = (
-            config.get('date_from') != date_from or
-            config.get('date_to') != date_to or
-            config.get('top_n') != top_n or
-            config.get('merge_ads') != merge_ads or
-            config.get('core_products_input') != core_products_input
-        )
-        
-        # Only clear cache if non-northbeam settings changed
-        if config_changed:
-            st.session_state.comprehensive_ads = None
-            st.session_state.report_config = None
-            st.info("🔄 Configuration changed. Please click 'Generate Report' to fetch fresh data with the new settings.")
-        else:
-            # Update the use_northbeam setting in the cached config for instant switching
-            if st.session_state.report_config:
-                st.session_state.report_config['use_northbeam'] = use_northbeam
+            config = st.session_state.report_config
+            # Check if configuration has changed (excluding use_northbeam for instant switching)
+            config_changed = (
+                config.get('date_from') != date_from or
+                config.get('date_to') != date_to or
+                config.get('top_n') != top_n or
+                config.get('merge_ads') != merge_ads or
+                config.get('core_products_input') != core_products_input
+            )
+            
+            # Only clear cache if non-northbeam settings changed
+            if config_changed:
+                st.session_state.comprehensive_ads = None
+                st.session_state.report_config = None
+                # Clear Google doc state when configuration changes
+                if 'google_doc_link' in st.session_state:
+                    del st.session_state.google_doc_link
+                if 'markdown_content' in st.session_state:
+                    del st.session_state.markdown_content
+                if 'report_filename' in st.session_state:
+                    del st.session_state.report_filename
+                if 'is_generating_google_doc' in st.session_state:
+                    del st.session_state.is_generating_google_doc
+                st.info("🔄 Configuration changed. Please click 'Generate Report' to fetch fresh data with the new settings.")
+            else:
+                # Update the use_northbeam setting in the cached config for instant switching
+                if st.session_state.report_config:
+                    st.session_state.report_config['use_northbeam'] = use_northbeam
     
 
     
@@ -4066,56 +4075,12 @@ def main():
     with st.sidebar.form("generate_report"):
         generate_button = st.form_submit_button("🔄 Generate Report", type="primary")
     
-    # Status messages in sidebar
-    if 'background_task_status' in st.session_state:
-        st.sidebar.info("🎬 Processing media URLs...")
-    elif st.session_state.comprehensive_ads and st.session_state.report_config:
-        st.sidebar.success("✅ Report ready")
-    
-    # Google Doc Export (only show if report is available)
+    # Status messages in sidebar - keep minimal
     if st.session_state.comprehensive_ads and st.session_state.report_config:
-        st.sidebar.markdown("---")
-        st.sidebar.subheader("📄 Export Report")
-        
-        if st.sidebar.button("📄 Generate Google Doc", type="secondary"):
-            with st.sidebar.spinner("🔄 Generating Google Doc..."):
-                try:
-                    # Generate markdown report
-                    config = st.session_state.report_config
-                    markdown_content = generate_markdown_report(
-                        st.session_state.comprehensive_ads,
-                        config['date_from'],
-                        config['date_to'],
-                        config['top_n'],
-                        config['core_products_input'],
-                        config['merge_ads'],
-                        config['use_northbeam']
-                    )
-                    
-                    # Save markdown file temporarily
-                    date_from_formatted = config['date_from'].replace('-', '')
-                    date_to_formatted = config['date_to'].replace('-', '')
-                    report_filename = f"reports/campaign_analysis_report_{date_from_formatted}-{date_to_formatted}.md"
-                    
-                    # Ensure reports directory exists
-                    os.makedirs("reports", exist_ok=True)
-                    
-                    with open(report_filename, 'w') as f:
-                        f.write(markdown_content)
-                    
-                    # Export to Google Doc
-                    doc_title = f"Thrive Causemetics Campaign Analysis {config['date_from']} to {config['date_to']}"
-                    shareable_link = export_report_to_google_doc(report_filename, doc_title)
-                    
-                    if shareable_link:
-                        st.sidebar.success("✅ Google Doc created successfully!")
-                        st.sidebar.markdown(f"**📄 [View Google Doc]({shareable_link})**")
-                    else:
-                        st.sidebar.error("❌ Failed to create Google Doc")
-                        
-                except Exception as e:
-                    st.sidebar.error(f"❌ Error creating Google Doc: {str(e)}")
-                    st.sidebar.exception(e)
+        # No status message - keep UI clean
+        pass
+    
+
     
 
     
@@ -4214,7 +4179,8 @@ def main():
                     }
                     
                 if comprehensive_ads:
-                    st.success(f"✅ Report generated successfully! {len(comprehensive_ads)} ads processed.")
+                    # No status message - keep UI clean
+                    pass
                 else:
                     st.error("❌ Failed to generate report. Please check the console for errors.")
                     
@@ -4316,11 +4282,10 @@ def main():
             return
         
         # Display context information in a clean, minimal layout
-        status_container = st.container()
-        
-        with status_container:
-            # Single row with 3 columns: Date range, merge ads, data source
-            col1, col2, col3 = st.columns([1, 1, 1])
+        # Use a unique key for the container to prevent re-rendering issues
+        with st.container():
+            # Single row with 4 columns: Date range, merge ads, data source, Google doc button
+            col1, col2, col3, col4 = st.columns([1, 1, 1, 1])
             
             with col1:
                 st.caption(f"📅 Date Range: {config['date_from']} to {config['date_to']}")
@@ -4333,6 +4298,89 @@ def main():
                 data_source_display = "Northbeam" if use_northbeam else "Meta"
                 data_source_color = "🟢" if use_northbeam else "🔵"
                 st.caption(f"{data_source_color} Data Source: {data_source_display}")
+            
+            with col4:
+                # Google Doc generation button with unique key
+                button_key = f"generate_google_doc_{config['date_from']}_{config['date_to']}"
+                
+                # Only show button if not currently generating
+                if not st.session_state.get('is_generating_google_doc', False):
+                    if st.button("📄 Generate Google Doc", type="secondary", key=button_key):
+                        # Set generating flag and clear existing state
+                        st.session_state.is_generating_google_doc = True
+                        if 'google_doc_link' in st.session_state:
+                            del st.session_state.google_doc_link
+                        if 'markdown_content' in st.session_state:
+                            del st.session_state.markdown_content
+                        if 'report_filename' in st.session_state:
+                            del st.session_state.report_filename
+                        st.rerun()
+                
+                # Show spinner if generating
+                if st.session_state.get('is_generating_google_doc', False):
+                    with st.spinner(""):
+                        try:
+                            # Generate markdown report
+                            markdown_content = generate_markdown_report(
+                                st.session_state.comprehensive_ads,
+                                config['date_from'],
+                                config['date_to'],
+                                config['top_n'],
+                                config['core_products_input'],
+                                config['merge_ads'],
+                                config['use_northbeam']
+                            )
+                            
+                            # Save markdown file temporarily
+                            date_from_formatted = config['date_from'].replace('-', '')
+                            date_to_formatted = config['date_to'].replace('-', '')
+                            report_filename = f"reports/campaign_analysis_report_{date_from_formatted}-{date_to_formatted}.md"
+                            
+                            # Ensure reports directory exists
+                            os.makedirs("reports", exist_ok=True)
+                            
+                            with open(report_filename, 'w') as f:
+                                f.write(markdown_content)
+                            
+                            # Export to Google Doc
+                            doc_title = f"Thrive Causemetics Campaign Analysis {config['date_from']} to {config['date_to']}"
+                            shareable_link = export_report_to_google_doc(report_filename, doc_title)
+                            
+                            if shareable_link:
+                                # Store the link in session state to display below the button
+                                st.session_state.google_doc_link = shareable_link
+                                st.session_state.markdown_content = markdown_content
+                                st.session_state.report_filename = report_filename
+                                # Clear generating flag
+                                st.session_state.is_generating_google_doc = False
+                                # No status message - keep UI clean
+                            else:
+                                st.error("❌ Failed to create Google Doc")
+                                st.session_state.is_generating_google_doc = False
+                                
+                        except Exception as e:
+                            st.error(f"❌ Error creating Google Doc: {str(e)}")
+                            st.exception(e)
+                            st.session_state.is_generating_google_doc = False
+                
+                # Display Google Doc link and download button if available
+                if 'google_doc_link' in st.session_state:
+                    st.markdown(f"**📄 [View Google Doc]({st.session_state.google_doc_link})**")
+                    
+                    # Download .md file button
+                    if 'markdown_content' in st.session_state and 'report_filename' in st.session_state:
+                        markdown_content = st.session_state.markdown_content
+                        report_filename = st.session_state.report_filename
+                        
+                        # Create download button for the markdown file with unique key
+                        download_key = f"download_md_file_{config['date_from']}_{config['date_to']}"
+                        st.download_button(
+                            label="📥 Download .md File",
+                            data=markdown_content,
+                            file_name=os.path.basename(report_filename),
+                            mime="text/markdown",
+                            key=download_key
+                        )
         
         
         # Export functionality can be added later if needed
