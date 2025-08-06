@@ -1987,7 +1987,7 @@ class MetaAdCreativesProcessor:
                             "url": img.get("url", ""),
                             "permalink": permalink_url
                         }
-                        print(f"🔍 Image {hash_part}: url={img.get('url')}, permalink={permalink_url}")
+                        # print(f"🔍 Image {hash_part}: url={img.get('url')}, permalink={permalink_url}")
                 
             except Exception as e:
                 print(f"❌ Image batch failed: {e}")
@@ -3729,7 +3729,7 @@ def display_campaign_explorer_tab(ad_objects, top_n=DEFAULT_TOP_N, core_products
                         display_creators_df_formatted.columns = ['Creator', 'Spend', 'ROAS', 'CTR', 'CPM', 'Thumbstop', 'AOV']
                         
                         # Use raw numbers for proper sorting, let Streamlit handle display
-                        st.dataframe(display_creators_df, use_container_width=True)
+                        st.dataframe(display_creators_df, use_container_width=True, hide_index=True)
                         
                         # Show all creators in expander
                         with st.expander(f"👥 Show all {len(creators_df)} creators"):
@@ -3747,7 +3747,7 @@ def display_campaign_explorer_tab(ad_objects, top_n=DEFAULT_TOP_N, core_products
                             all_creators_formatted.columns = ['Creator', 'Spend', 'ROAS', 'CTR', 'CPM', 'Thumbstop', 'AOV']
                             
                             # Use raw numbers for proper sorting, let Streamlit handle display
-                            st.dataframe(creators_df, use_container_width=True)
+                            st.dataframe(creators_df, use_container_width=True, hide_index=True)
                     else:
                         st.info("No creator data available for the selected filters.")
 
