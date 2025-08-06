@@ -26,8 +26,12 @@ from dotenv import load_dotenv
 # Load environment variables
 load_dotenv()
 
-START_DATE='2025-08-05' # YYYY-MM-DD
-END_DATE='2025-08-05'
+# START_DATE='2025-08-05' # YYYY-MM-DD
+# END_DATE='2025-08-05'
+
+START_DATE = "2025-07-05T00:00:00Z"
+END_DATE = "2025-08-05T23:59:59Z"
+
 TARGET_AD_ID = "120229173063110716"
 
 # ===== NORTHBEAM CONFIGURATION =====
@@ -71,22 +75,17 @@ def create_northbeam_export(start_date, end_date):
     
     url = f"{NORTHBEAM_BASE_URL}/exports/data-export"
     
-    start_datetime = f"{start_date}T00:00:00Z"
-    end_datetime = f"{end_date}T23:59:59Z"
-    #  exclusive_end_date = datetime.strptime(end_date, '%Y-%m-%d') + timedelta(days=1)
-    # end_datetime = exclusive_end_date.strftime('%Y-%m-%dT00:00:00Z')
+    # start_datetime = f"{start_date}T00:00:00Z"
+    # end_datetime = f"{end_date}T23:59:59Z"
+    
+    start_datetime = start_date
+    end_datetime = end_date
 
-    # end_of_day = datetime.strptime(end_date, '%Y-%m-%d').replace(hour=23, minute=59, second=59)
-    # end_datetime = end_of_day.strftime('%Y-%m-%dT%H:%M:%SZ')
-    
-    # start_datetime = "2025-08-05T00:00:00Z"
-    # end_datetime = "2025-08-05T23:59:59Z"
-    # end_datetime = "2025-08-06T23:59:59Z"
-    
-    
+
     print("Start: ", start_datetime)
     print("End: ", end_datetime)
 
+    #  "export_file_name": f"NB_{start_date.replace('-', '')}-{end_date.replace('-', '')}",
 
     payload = {
         "period_type": "FIXED",
@@ -105,7 +104,7 @@ def create_northbeam_export(start_date, end_date):
             "include_kind_and_platform": True
         },
         "time_granularity": "DAILY",
-        "export_file_name": f"NB_{start_date.replace('-', '')}-{end_date.replace('-', '')}",
+        "export_file_name": f"NB_DATETIME_TEST",
         "bucket_name": S3_BUCKET,
         "aws_role": "arn:aws:iam::881825931691:role/NorthbeamS3ExportRole",
         "level": "ad",
@@ -346,15 +345,13 @@ def main():
 
 
     # Validate dates
-    try:
-        datetime.strptime(start_date, '%Y-%m-%d')
-        datetime.strptime(end_date, '%Y-%m-%d')
-    except ValueError:
-        print("❌ Invalid date format. Please use YYYY-MM-DD")
-        return
-    
-    print(f"\n🔄 Processing Northbeam data for {start_date} to {end_date}")
-    
+    # try:
+    #     datetime.strptime(start_date, '%Y-%m-%d')
+    #     datetime.strptime(end_date, '%Y-%m-%d')
+    # except ValueError:
+    #     print("❌ Invalid date format. Please use YYYY-MM-DD")
+    #     return
+        
     # Step 1: Create export
     print("\n📊 Step 1: Creating Northbeam export...")
     export_id = create_northbeam_export(start_date, end_date)

@@ -530,8 +530,7 @@ def fetch_meta_insights(date_from=None, date_to=None):
             with open(meta_json_filename, 'w') as f:
                 json.dump(ads_list, f, indent=2)
             print(f"💾 Saved raw Meta insights JSON: {meta_json_filename}")
-        else:
-            print(f"💾 Meta insights saved to S3 only (local saving disabled)")
+        
     
     return ads_list
 
@@ -567,16 +566,17 @@ def create_northbeam_export(start_date, end_date):
     url = f"{NORTHBEAM_BASE_URL}/exports/data-export"
     
     start_datetime = f"{start_date}T00:00:00Z"
-    # exclusive_end_date = datetime.strptime(end_date, '%Y-%m-%d') + timedelta(days=1)
-    # end_datetime = exclusive_end_date.strftime('%Y-%m-%dT00:00:00Z')
     end_datetime = f"{end_date}T23:59:59Z"
+
+    print("Start datetime: ", start_datetime)
+    print("End datetime: ", end_datetime)
 
 
     payload = {
         "period_type": "FIXED",
         "period_options": {
-            "period_starting_at": f"{start_datetime}",
-            "period_ending_at": f"{end_datetime}"
+            "period_starting_at": start_datetime,
+            "period_ending_at": end_datetime,
         },
         "attribution_options": {
             "attribution_models": [ATTRIBUTION_MODEL],
@@ -851,7 +851,7 @@ def fetch_all_data_sequentially(date_from=None, date_to=None):
         except Exception as e:
             print(f"⚠️ Error loading existing Meta insights from S3: {e}")
     else:
-        print(f"📁 Meta insights not found in S3")
+        print(f"❌ Meta insights not found in S3")
     
     # Fallback to local Meta insights file (only if local saving is enabled)
     if DOWNLOAD_REPORTS_LOCALLY and existing_files['meta_insights'] is None:
@@ -885,7 +885,7 @@ def fetch_all_data_sequentially(date_from=None, date_to=None):
         except Exception as e:
             print(f"⚠️ Error loading existing Northbeam data from S3: {e}")
     else:
-        print(f"📁 Northbeam data not found in S3")
+        print(f"❌ Northbeam data not found in S3")
     
     # Fallback to local Northbeam data file (only if local saving is enabled)
     if DOWNLOAD_REPORTS_LOCALLY and existing_files['northbeam_data'] is None:
@@ -929,7 +929,7 @@ def fetch_all_data_sequentially(date_from=None, date_to=None):
         
     # Fetch Meta insights first (if missing)
     if meta_insights is None:
-        print("📊 STEP 2a: Fetching Meta insights...")
+        print("\n📊 STEP 2a: Fetching Meta insights...")
         try:
             meta_insights = fetch_meta_insights(date_from, date_to)
             print(f"✅ Meta insights fetched: {len(meta_insights) if meta_insights else 0} ads")
@@ -941,7 +941,7 @@ def fetch_all_data_sequentially(date_from=None, date_to=None):
     
     # Fetch Northbeam data second (if missing)
     if northbeam_df is None:
-        print("📊 STEP 2b: Fetching Northbeam data...")
+        print("\n📊 STEP 2b: Fetching Northbeam data...")
         try:
             northbeam_df = fetch_northbeam_data(date_from, date_to)
             print(f"✅ Northbeam data fetched: {len(northbeam_df) if northbeam_df is not None else 0} rows")
@@ -2153,7 +2153,7 @@ class MetaAdCreativesProcessor:
                         if video_id in video_to_ads:
                             ad_id = video_to_ads[video_id]
                             failed_ads.add(ad_id)
-                            print(f"🚨 Ad {ad_id} video priority failed (URL fetch failed)")
+                            # print(f"🚨 Ad {ad_id} video priority failed (URL fetch failed)")
             
             # Fetch image URLs
             if image_hashes:
@@ -2259,24 +2259,7 @@ class MetaAdCreativesProcessor:
                 ads_needing_urls.append(ad_id_str)
                 
         if ads_needing_urls:
-            print(f"🔄 Processing URLs for {len(ads_needing_urls)} ads (including existing ads with failed attempts)")
-            
-            # Debug: Show some examples of ads being processed
-            print(f"📋 Examples of ads being processed:")
-            for i, ad_id in enumerate(ads_needing_urls[:5]):
-                if ad_id in processed_data:
-                    ad_data = processed_data[ad_id]
-                    has_video = bool(ad_data.get("video_source_url") or ad_data.get("video_permalink_url"))
-                    has_image = bool(ad_data.get("image_url") or ad_data.get("image_permalink_url"))
-                    priority = ad_data.get("priority", 0)
-                    max_attempts = ad_data.get("max_priority_attempts", 0)
-                    print(f"  - Ad {ad_id}: priority={priority}, max_attempts={max_attempts}, has_video={has_video}, has_image={has_image}")
-                else:
-                    print(f"  - Ad {ad_id}: NEW AD (not in processed_data)")
-            
             processed_data = self.process_media_urls(raw_data, processed_data, ad_types)
-        else:
-            print("⚠️ No ads need URL processing")
         
         # Save final processed data (evolving document)
         self.save_processed_data(processed_data)
@@ -4012,7 +3995,7 @@ def main():
         date_to = st.text_input("To (inclusive)", value=DEFAULT_DATE_TO, key="date_to")
     
     st.sidebar.subheader("📊 Settings")
-    top_n = st.sidebar.number_input("Top N", min_value=1, max_value=50, value=DEFAULT_TOP_N, key="top_n")
+    top_n = st.sidebar.number_input("Top N (default # ads/entities to display)", min_value=1, max_value=50, value=DEFAULT_TOP_N, key="top_n")
     merge_ads = st.sidebar.checkbox("Merge Ads with Same Name", value=DEFAULT_MERGE_ADS_WITH_SAME_NAME, key="merge_ads", help="Combine ads with identical names and campaign types, aggregate their metrics")
     use_northbeam = st.sidebar.checkbox(
         "Use Northbeam Data", 
@@ -4108,105 +4091,118 @@ def main():
 
     # Main content area
     if generate_button:
-        with st.spinner("🔄 Generating report..."):
-            try:
-                # Temporarily update the global variables for this session
-
-                main.DATE_FROM = date_from
-                main.DATE_TO = date_to
-                main.TOP_N = top_n
-                main.MERGE_ADS_WITH_SAME_NAME = merge_ads
-                main.USE_NORTHBEAM_DATA = use_northbeam
-                
-                # Parse core products from user-friendly format
-                if core_products_input:
-                    core_products_list = []
-                    for line in core_products_input.strip().split('\n'):
-                        if line.strip():
-                            # Split by comma and clean up
-                            products = [p.strip() for p in line.split(',') if p.strip()]
-                            if products:
-                                core_products_list.append(products)
-                    main.CORE_PRODUCTS = core_products_list
-                else:
-                    main.CORE_PRODUCTS = DEFAULT_CORE_PRODUCTS
-                
-                # Always generate fresh comprehensive ad objects to ensure merge setting is respected
-                
-                # Clear previous background task status
-                if 'background_task_status' in st.session_state:
-                    del st.session_state.background_task_status
-                
-                # Define filename for saving
-                date_from_formatted = date_from.replace('-', '')
-                date_to_formatted = date_to.replace('-', '')
-                comprehensive_filename = f"campaign-reporting/processed/comprehensive_ads/comprehensive_ads_{date_from_formatted}-{date_to_formatted}.json"
-                
-                # Set the global flag for using cached files
-                set_use_cached_files(use_cached_files)
-                
-                # Fetch data using the updated configuration
-                meta_insights, northbeam_df = fetch_all_data_sequentially(date_from, date_to)
-                
-                # Store meta_insights in session state for background processing
-                st.session_state.meta_insights = meta_insights
-                
-                # Apply filtering to Northbeam data if it exists
-                if northbeam_df is not None:
-                    # Import the filtering function
+        # Create a single progress element that gets updated
+        progress_placeholder = st.empty()
+        
+        try:
+            # Temporarily update the global variables for this session
+            main.DATE_FROM = date_from
+            main.DATE_TO = date_to
+            main.TOP_N = top_n
+            main.MERGE_ADS_WITH_SAME_NAME = merge_ads
+            main.USE_NORTHBEAM_DATA = use_northbeam
+            
+            # Parse core products from user-friendly format
+            if core_products_input:
+                core_products_list = []
+                for line in core_products_input.strip().split('\n'):
+                    if line.strip():
+                        # Split by comma and clean up
+                        products = [p.strip() for p in line.split(',') if p.strip()]
+                        if products:
+                            core_products_list.append(products)
+                main.CORE_PRODUCTS = core_products_list
+            else:
+                main.CORE_PRODUCTS = DEFAULT_CORE_PRODUCTS
+            
+            # Always generate fresh comprehensive ad objects to ensure merge setting is respected
+            
+            # Clear previous background task status
+            if 'background_task_status' in st.session_state:
+                del st.session_state.background_task_status
+            
+            # Define filename for saving
+            date_from_formatted = date_from.replace('-', '')
+            date_to_formatted = date_to.replace('-', '')
+            comprehensive_filename = f"campaign-reporting/processed/comprehensive_ads/comprehensive_ads_{date_from_formatted}-{date_to_formatted}.json"
+            
+            # Set the global flag for using cached files
+            set_use_cached_files(use_cached_files)
+            
+            # Update progress - Step 1: Checking existing data
+            progress_placeholder.info("🔍 Step 1/4: Checking for existing data files...")
+            
+            # Fetch data using the updated configuration
+            meta_insights, northbeam_df = fetch_all_data_sequentially(date_from, date_to)
+            
+            # Update progress - Step 2: Data fetched
+            progress_placeholder.info("📊 Step 2/4: Data fetched successfully")
+            
+            # Store meta_insights in session state for background processing
+            st.session_state.meta_insights = meta_insights
+            
+            # Apply filtering to Northbeam data if it exists
+            if northbeam_df is not None:
+                # Import the filtering function
                                                         # Removed import - functions are now merged into app.py
-                    northbeam_df = filter_attribution_data(northbeam_df, ACCOUNTING_MODE_FILTER, NORTHBEAM_PLATFORM)
+                northbeam_df = filter_attribution_data(northbeam_df, ACCOUNTING_MODE_FILTER, NORTHBEAM_PLATFORM)
+            
+            if meta_insights is None or northbeam_df is None:
+                st.error("❌ Failed to fetch required data")
+                return
+            
+            # Update progress - Step 3: Merging data
+            progress_placeholder.info("🔄 Step 3/4: Merging Meta and Northbeam data...")
+            
+            # Merge data into comprehensive objects
+            comprehensive_ads = merge_data(northbeam_df, meta_insights, date_from, date_to)
+            
+            # Merge ads with same name (if enabled)
+            if merge_ads:
+                comprehensive_ads = merge_ads_with_same_name(comprehensive_ads, merge_by_campaign_type=True)
+            
+            # Clean any remaining NaN values
+            comprehensive_ads = clean_nan_values(comprehensive_ads)
+            
+            # Update progress - Step 4: Saving data
+            progress_placeholder.info("💾 Step 4/4: Saving comprehensive data...")
+            
+            # Save comprehensive ad objects to reports directory
+            if comprehensive_ads:
+                # Save to S3
+                s3_key = f"campaign-reporting/processed/comprehensive_ads/comprehensive_ads_{date_from_formatted}-{date_to_formatted}.json"
+                save_json_to_s3(comprehensive_ads, s3_key)
                 
-                if meta_insights is None or northbeam_df is None:
-                    st.error("❌ Failed to fetch required data")
-                    return
-                
-                # Merge data into comprehensive objects
-                comprehensive_ads = merge_data(northbeam_df, meta_insights, date_from, date_to)
-                
-                # Merge ads with same name (if enabled)
-                if merge_ads:
-                    comprehensive_ads = merge_ads_with_same_name(comprehensive_ads, merge_by_campaign_type=True)
-                
-                # Clean any remaining NaN values
-                comprehensive_ads = clean_nan_values(comprehensive_ads)
-                
-                # Save comprehensive ad objects to reports directory
-                if comprehensive_ads:
-                    # Save to S3
-                    s3_key = f"campaign-reporting/processed/comprehensive_ads/comprehensive_ads_{date_from_formatted}-{date_to_formatted}.json"
-                    save_json_to_s3(comprehensive_ads, s3_key)
-                    
-                    # Save locally if enabled
-                    if DOWNLOAD_REPORTS_LOCALLY:
-                        os.makedirs("campaign-reporting/processed/comprehensive_ads", exist_ok=True)
-                        with open(comprehensive_filename, 'w') as f:
-                            json.dump(comprehensive_ads, f, indent=2)
-                    else:
-                        print(f"💾 Comprehensive ads saved to S3 only (local saving disabled)")
-                    
-                    # Store data in session state for persistence across reruns
-                    st.session_state.comprehensive_ads = comprehensive_ads
-                    st.session_state.report_config = {
-                        'date_from': date_from,
-                        'date_to': date_to,
-                        'top_n': top_n,
-                        'core_products_input': core_products_input,
-                        'merge_ads': merge_ads,
-                        'use_northbeam': use_northbeam,
-                        'date_from_formatted': date_from_formatted,
-                        'date_to_formatted': date_to_formatted
-                    }
-                    
-                if comprehensive_ads:
-                    # No status message - keep UI clean
-                    pass
+                # Save locally if enabled
+                if DOWNLOAD_REPORTS_LOCALLY:
+                    os.makedirs("campaign-reporting/processed/comprehensive_ads", exist_ok=True)
+                    with open(comprehensive_filename, 'w') as f:
+                        json.dump(comprehensive_ads, f, indent=2)
                 else:
-                    st.error("❌ Failed to generate report. Please check the console for errors.")
+                    print(f"💾 Comprehensive ads saved to S3 only (local saving disabled)")
+                
+                # Store data in session state for persistence across reruns
+                st.session_state.comprehensive_ads = comprehensive_ads
+                st.session_state.report_config = {
+                    'date_from': date_from,
+                    'date_to': date_to,
+                    'top_n': top_n,
+                    'core_products_input': core_products_input,
+                    'merge_ads': merge_ads,
+                    'use_northbeam': use_northbeam,
+                    'date_from_formatted': date_from_formatted,
+                    'date_to_formatted': date_to_formatted
+                }
+                
+                # Final success message
+                progress_placeholder.success("✅ Report generated successfully!")
                     
-            except Exception as e:
-                st.error(f"❌ Error generating report: {str(e)}")
-                st.exception(e)
+            else:
+                st.error("❌ Failed to generate report. Please check the console for errors.")
+                
+        except Exception as e:
+            st.error(f"❌ Error generating report: {str(e)}")
+            st.exception(e)
     
     # Start background task for Meta ad creatives processing AFTER comprehensive_ads is created
     # This runs independently and doesn't block the main display
@@ -4444,12 +4440,8 @@ def main():
     else:
         # Welcome screen
         st.write("""
-        This dashboard provides comprehensive analytics by campaigns & products.
-        
-        **To get started:**
-        1. Review and edit the configuration in the sidebar
-        2. Click "Generate Report" to create a new analysis
-        3. Explore the Summary and Details tabs
+        **To get started:**\n
+        ⬅️ Select Date Range and configure settings in the sidebar
         """)
         
 
