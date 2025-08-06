@@ -567,8 +567,10 @@ def create_northbeam_export(start_date, end_date):
     url = f"{NORTHBEAM_BASE_URL}/exports/data-export"
     
     start_datetime = f"{start_date}T00:00:00Z"
-    exclusive_end_date = datetime.strptime(end_date, '%Y-%m-%d') + timedelta(days=1)
-    end_datetime = exclusive_end_date.strftime('%Y-%m-%dT00:00:00Z')
+    # exclusive_end_date = datetime.strptime(end_date, '%Y-%m-%d') + timedelta(days=1)
+    # end_datetime = exclusive_end_date.strftime('%Y-%m-%dT00:00:00Z')
+    end_datetime = f"{end_date}T23:59:59Z"
+
 
     payload = {
         "period_type": "FIXED",

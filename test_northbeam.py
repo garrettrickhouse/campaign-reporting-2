@@ -26,6 +26,10 @@ from dotenv import load_dotenv
 # Load environment variables
 load_dotenv()
 
+START_DATE='2025-08-05' # YYYY-MM-DD
+END_DATE='2025-08-05'
+TARGET_AD_ID = "120229173063110716"
+
 # ===== NORTHBEAM CONFIGURATION =====
 NORTHBEAM_DATA_CLIENT_ID = os.getenv('NORTHBEAM_DATA_CLIENT_ID')
 NORTHBEAM_API_KEY = os.getenv('NORTHBEAM_API_KEY')
@@ -68,18 +72,21 @@ def create_northbeam_export(start_date, end_date):
     url = f"{NORTHBEAM_BASE_URL}/exports/data-export"
     
     start_datetime = f"{start_date}T00:00:00Z"
-    exclusive_end_date = datetime.strptime(end_date, '%Y-%m-%d') + timedelta(days=1)
-    end_datetime = exclusive_end_date.strftime('%Y-%m-%dT00:00:00Z')
+    end_datetime = f"{end_date}T23:59:59Z"
+    #  exclusive_end_date = datetime.strptime(end_date, '%Y-%m-%d') + timedelta(days=1)
+    # end_datetime = exclusive_end_date.strftime('%Y-%m-%dT00:00:00Z')
 
     # end_of_day = datetime.strptime(end_date, '%Y-%m-%d').replace(hour=23, minute=59, second=59)
     # end_datetime = end_of_day.strftime('%Y-%m-%dT%H:%M:%SZ')
     
-    # end_datetime = "2025-06-01T23:59:59Z"
-    # end_datetime = "2025-06-02T00:00:00Z"
+    # start_datetime = "2025-08-05T00:00:00Z"
+    # end_datetime = "2025-08-05T23:59:59Z"
+    # end_datetime = "2025-08-06T23:59:59Z"
     
     
     print("Start: ", start_datetime)
     print("End: ", end_datetime)
+
 
     payload = {
         "period_type": "FIXED",
@@ -333,9 +340,11 @@ def main():
     print("✅ Environment variables loaded successfully")
     
     # Get date inputs
-    start_date = '2025-06-01' # YYYY-MM-DD
-    end_date = '2025-06-01'
+    start_date = START_DATE # YYYY-MM-DD
+    end_date = END_DATE
     
+
+
     # Validate dates
     try:
         datetime.strptime(start_date, '%Y-%m-%d')
@@ -367,7 +376,7 @@ def main():
     
     # Step 4: Print metrics for specific ad_id
     print("\n📊 Step 4: Printing metrics for ad_id 120225701404370716...")
-    target_ad_id = "120225701404370716"
+    target_ad_id = TARGET_AD_ID
     ad_data = filtered_df[filtered_df['ad_id'] == target_ad_id]
     
     if not ad_data.empty:
