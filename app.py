@@ -27,7 +27,7 @@ load_dotenv()
 # User Variables Config
 # MERGE_ADS_WITH_SAME_NAME = True
 # USE_NORTHBEAM_DATA = True  # Set to True to use Northbeam data for spend/revenue metrics
-DOWNLOAD_REPORTS_LOCALLY = False  # Set to True to save all fetched/processed data locally (in addition to S3)
+DOWNLOAD_REPORTS_LOCALLY = True  # Set to True to save all fetched/processed data locally (in addition to S3)
 # Note: When DOWNLOAD_REPORTS_LOCALLY = False, files are only saved to S3, saving disk space
 
 # Configuration - these will be set from frontend data
@@ -135,7 +135,7 @@ def save_json_to_s3(data, s3_key):
             Body=json_data,
             ContentType='application/json'
         )
-        print(f"✅ Saved JSON to S3: s3://{S3_BUCKET}/{s3_key}")
+        # print(f"✅ Saved JSON to S3: s3://{S3_BUCKET}/{s3_key}")
         return True
     except Exception as e:
         print(f"⚠️ S3 access denied or unavailable: {e}")
@@ -910,23 +910,21 @@ def fetch_all_data_sequentially(date_from=None, date_to=None):
     
     # Check if we should use cached files only
     if USE_CACHED_FILES:
-        print("🔄 USE_CACHED_FILES is enabled - checking for existing files")
         
         # Check if we have the required files for this date range
         missing_files = []
         if meta_insights is None:
             missing_files.append("Meta insights")
+            print(f"❌ Missing cached Meta insights {date_from} to {date_to}")
+
         if northbeam_df is None:
             missing_files.append("Northbeam data")
-        
-        if missing_files:
-            print(f"❌ Missing cached files for date range {date_from} to {date_to}: {', '.join(missing_files)}")
-            print("🔄 Fetching fresh data for missing files...")
-            # Continue with fetching fresh data for missing files
-        else:
+            print(f"❌ Missing cached Northbeam data {date_from} to {date_to}")
+
+        if not missing_files:
             print("✅ All required cached files found - using existing data only")
             return meta_insights, northbeam_df
-    
+        
     # Fetch Meta insights first (if missing)
     if meta_insights is None:
         print("📊 STEP 2a: Fetching Meta insights...")
@@ -960,7 +958,6 @@ def fetch_all_data_sequentially(date_from=None, date_to=None):
 # ===== DATA PROCESSING FUNCTIONS =====
 def merge_data(northbeam_data, meta_data, date_from=None, date_to=None):
     """Merge Northbeam and Meta data into comprehensive ad objects"""
-    print("Merging Northbeam and Meta data...")
     
     # Convert northbeam_data DataFrame to list of dictionaries if needed
     if isinstance(northbeam_data, pd.DataFrame):
@@ -1052,6 +1049,8 @@ def merge_data(northbeam_data, meta_data, date_from=None, date_to=None):
         
         comprehensive_ads.append(ad_object)
     
+    print("✅ Merged Northbeam and Meta data")
+
     return comprehensive_ads
 
 def get_metric_value(ad, metric_key, data_source='northbeam', default=0.0):
@@ -1525,6 +1524,10 @@ class MetaAdCreativesProcessor:
                 json.dump(data, f, indent=2)
         else:
             print(f"💾 Master URLs saved to S3 only (local saving disabled)")
+        
+        # Clear the processed data cache to force reload of updated data
+        clear_processed_data_cache()
+        print("🔄 Cleared processed data cache to ensure fresh data on next access")
     
     def save_raw_data(self, data: Dict, date_from: str, date_to: str):
         """Save raw adcreatives data"""
@@ -1556,16 +1559,25 @@ class MetaAdCreativesProcessor:
             
             ad_data = processed_data[ad_id_str]
             
+            # Check if we have successfully obtained URLs
+            has_video_urls = bool(ad_data.get("video_source_url") or ad_data.get("video_permalink_url"))
+            has_image_urls = bool(ad_data.get("image_url") or ad_data.get("image_permalink_url"))
+            
             # Check if we have priority tracking and haven't exhausted all attempts
             current_priority = ad_data.get("priority", 0)
             max_priority_attempts = ad_data.get("max_priority_attempts", 0)
             
-            # If we haven't tracked max attempts yet, or if we have more to try
-            if max_priority_attempts == 0 or current_priority < max_priority_attempts - 1:
+            # Include ad if:
+            # 1. We haven't successfully obtained URLs yet, OR
+            # 2. We haven't exhausted all priority attempts yet
+            if not (has_video_urls or has_image_urls) or (max_priority_attempts > 0 and current_priority < max_priority_attempts - 1):
                 missing_ads.append(ad_id_str)
-            # If we've exhausted all attempts, skip this ad
-            else:
-                print(f"⚠️ Ad {ad_id_str} has exhausted all priority attempts ({max_priority_attempts} total)")
+            # If we've successfully obtained URLs or exhausted all attempts, skip this ad
+            # else:
+            #     if has_video_urls or has_image_urls:
+            #         print(f"✅ Ad {ad_id_str} already has media URLs")
+            #     else:
+            #         print(f"⚠️ Ad {ad_id_str} has exhausted all priority attempts ({max_priority_attempts} total)")
         
         return missing_ads
     
@@ -1652,16 +1664,49 @@ class MetaAdCreativesProcessor:
             if ad_id in raw_data and "error" not in raw_data[ad_id]:
                 # Extract thumbnail from raw data
                 thumbnail_url = ""
+                video_thumbnail_url = ""
                 creative_data = raw_data[ad_id]
                 
                 if "data" in creative_data and creative_data["data"]:
                     creative = creative_data["data"][0]
                     thumbnail_url = creative.get("thumbnail_url", "")
+                    
+                    # Extract video thumbnail from asset feed (priority 1)
+                    asset_feed = creative.get("asset_feed_spec", {})
+                    videos = asset_feed.get("videos", [])
+                    if videos:
+                        # Get priority 1 video (lowest priority number)
+                        customization_rules = asset_feed.get("asset_customization_rules", [])
+                        priority_map = {}
+                        
+                        for rule in customization_rules:
+                            video_label = rule.get("video_label", {})
+                            if video_label.get("id") and rule.get("priority"):
+                                priority_map[video_label["id"]] = rule["priority"]
+                        
+                        # Find video with priority 1
+                        priority_1_video = None
+                        for video in videos:
+                            adlabels = video.get("adlabels", [])
+                            label_id = adlabels[0].get("id") if adlabels else None
+                            priority = priority_map.get(label_id, 999) if label_id else 999
+                            
+                            if priority == 1:
+                                priority_1_video = video
+                                break
+                        
+                        # If no priority 1 found, use first video
+                        if not priority_1_video and videos:
+                            priority_1_video = videos[0]
+                        
+                        if priority_1_video:
+                            video_thumbnail_url = priority_1_video.get("thumbnail_url", "")
                 
                 # Initialize processed entry
                 processed_data[ad_id] = {
                     "ad_id": ad_id,
-                    "thumbnail_url": thumbnail_url,
+                    "thumbnail_url": thumbnail_url,  # Basic thumbnail from ad creative
+                    "video_thumbnail_url": video_thumbnail_url,  # High-quality thumbnail from asset feed
                     "video_source_url": "",
                     "video_permalink_url": "",
                     "image_url": "",
@@ -1836,6 +1881,7 @@ class MetaAdCreativesProcessor:
                                     "permalink": permalink_url,
                                     "thumbnail": thumbnail_url
                                 }
+                                print(f"🔍 Video {video_id}: source={bool(video_data.get('source'))}, permalink={bool(permalink_url)}")
                             except json.JSONDecodeError:
                                 continue
                 
@@ -1887,6 +1933,7 @@ class MetaAdCreativesProcessor:
                             "url": img.get("url", ""),
                             "permalink": permalink_url
                         }
+                        print(f"🔍 Image {hash_part}: url={img.get('url')}, permalink={permalink_url}")
                 
             except Exception as e:
                 print(f"❌ Image batch failed: {e}")
@@ -1902,10 +1949,10 @@ class MetaAdCreativesProcessor:
         print(f"🔄 Processing media URLs by ad type...")
         
         # Group ads by type and extract prioritized assets
-        video_ads = {}
-        image_ads = {}
-        carousel_ads = {}
+        # All ads will be processed as "mixed" (like carousel) to handle both video and image assets
+        mixed_ads = {}
         
+        # Process ads from raw_data (new ads)
         for ad_id, creative_data in raw_data.items():
             if "error" in creative_data or "data" not in creative_data:
                 continue
@@ -1931,114 +1978,63 @@ class MetaAdCreativesProcessor:
                 processed_data[ad_id]["all_image_hashes"] = [a[1] for a in image_assets]
                 processed_data[ad_id]["max_priority_attempts"] = len(assets)
             
-            # Classify by ad type
-            ad_type = ad_types.get(ad_id, "").lower()
-            
-            if "video" in ad_type:
-                video_assets = [a for a in assets if a[0] == "video"]
-                if video_assets:
-                    video_ads[ad_id] = video_assets
-            elif "static" in ad_type or "image" in ad_type:
-                image_assets = [a for a in assets if a[0] == "image"]
-                if image_assets:
-                    image_ads[ad_id] = image_assets
-            else:  # carousel or unknown
-                carousel_ads[ad_id] = assets
+            # All ads are processed as mixed (like carousel) to handle both video and image assets
+            mixed_ads[ad_id] = {
+                "assets": assets,
+                "ad_type": ad_types.get(ad_id, "").lower()
+            }
         
-        # Process video ads
-        if video_ads:
+        # Process existing ads that need URL processing (not in raw_data)
+        existing_ads_processed = 0
+        for ad_id, ad_data in processed_data.items():
+            # Skip if we already processed this ad from raw_data
+            if ad_id in raw_data:
+                continue
+            
+            # Check if this ad needs URL processing
+            has_video_urls = bool(ad_data.get("video_source_url") or ad_data.get("video_permalink_url"))
+            has_image_urls = bool(ad_data.get("image_url") or ad_data.get("image_permalink_url"))
+            current_priority = ad_data.get("priority", 0)
+            max_priority_attempts = ad_data.get("max_priority_attempts", 0)
+            
+            # Skip if we have URLs or exhausted attempts
+            if (has_video_urls or has_image_urls) or (max_priority_attempts > 0 and current_priority >= max_priority_attempts - 1):
+                continue
+            
+            # Create assets from stored video_ids and image_hashes
+            all_video_ids = ad_data.get("all_video_ids", [])
+            all_image_hashes = ad_data.get("all_image_hashes", [])
+            
+            assets = []
+            for video_id in all_video_ids:
+                assets.append(("video", video_id, 999, f"stored_video_{video_id}"))
+            for image_hash in all_image_hashes:
+                assets.append(("image", image_hash, 999, f"stored_image_{image_hash}"))
+            
+            if not assets:
+                continue
+            
+            existing_ads_processed += 1
+            
+            # All existing ads are processed as mixed (like carousel)
+            mixed_ads[ad_id] = {
+                "assets": assets,
+                "ad_type": ad_types.get(ad_id, "").lower()
+            }
+        
+        print(f"📊 Processed {existing_ads_processed} existing ads for URL fetching")
+        
+        # Process all ads as mixed (like carousel) to handle both video and image assets
+        if mixed_ads:
             video_ids = []
-            video_to_ads = {}
-            
-            for ad_id, assets in video_ads.items():
-                # Get current priority attempt
-                current_priority = processed_data[ad_id].get("priority", 0)
-                
-                # Find the asset at the current priority index
-                video_assets = [a for a in assets if a[0] == "video"]
-                if current_priority < len(video_assets):
-                    video_id = video_assets[current_priority][1]
-                    video_ids.append(video_id)
-                    video_to_ads[video_id] = ad_id
-                    # Update video_id to current attempt
-                    processed_data[ad_id]["video_id"] = video_id
-                    # print(f"🔄 Ad {ad_id}: Trying video priority {current_priority} (video_id: {video_id})")
-                else:
-                    print(f"⚠️ Ad {ad_id}: No more video assets to try (current priority: {current_priority})")
-            
-            video_urls = self.batch_fetch_video_urls(video_ids)
-            
-            for video_id, urls in video_urls.items():
-                if video_id in video_to_ads:
-                    ad_id = video_to_ads[video_id]
-                    # Get current priority for this specific ad
-                    current_priority = processed_data[ad_id].get("priority", 0)
-                    
-                    # Only update if URLs are missing or different
-                    if not processed_data[ad_id].get("video_source_url") or processed_data[ad_id]["video_source_url"] != urls.get("source", ""):
-                        processed_data[ad_id]["video_source_url"] = urls.get("source", "")
-                    if not processed_data[ad_id].get("video_permalink_url") or processed_data[ad_id]["video_permalink_url"] != urls.get("permalink", ""):
-                        processed_data[ad_id]["video_permalink_url"] = urls.get("permalink", "")
-                    if urls.get("thumbnail") and not processed_data[ad_id].get("thumbnail_url"):
-                        processed_data[ad_id]["thumbnail_url"] = urls["thumbnail"]
-                    
-                    # Check if we got URLs - if not, increment priority for next attempt
-                    if not urls.get("source") and not urls.get("permalink"):
-                        processed_data[ad_id]["priority"] = current_priority + 1
-                        print(f"❌ Ad {ad_id}: Video priority {current_priority} failed, will try priority {current_priority + 1} next time")
-                    else:
-                        print(f"✅ Ad {ad_id}: Video priority {current_priority} succeeded")
-        
-        # Process image ads
-        if image_ads:
             image_hashes = []
-            hash_to_ads = {}
-            
-            for ad_id, assets in image_ads.items():
-                # Get current priority attempt
-                current_priority = processed_data[ad_id].get("priority", 0)
-                
-                # Find the asset at the current priority index
-                image_assets = [a for a in assets if a[0] == "image"]
-                if current_priority < len(image_assets):
-                    image_hash = image_assets[current_priority][1]
-                    image_hashes.append(image_hash)
-                    hash_to_ads[image_hash] = ad_id
-                    # Update image_hash to current attempt
-                    processed_data[ad_id]["image_hash"] = image_hash
-                    print(f"🔄 Ad {ad_id}: Trying image priority {current_priority} (image_hash: {image_hash})")
-                else:
-                    print(f"⚠️ Ad {ad_id}: No more image assets to try (current priority: {current_priority})")
-            
-            image_urls = self.batch_fetch_image_urls(image_hashes)
-            
-            for image_hash, urls in image_urls.items():
-                if image_hash in hash_to_ads:
-                    ad_id = hash_to_ads[image_hash]
-                    # Get current priority for this specific ad
-                    current_priority = processed_data[ad_id].get("priority", 0)
-                    
-                    # Only update if URLs are missing or different
-                    if not processed_data[ad_id].get("image_url") or processed_data[ad_id]["image_url"] != urls.get("url", ""):
-                        processed_data[ad_id]["image_url"] = urls.get("url", "")
-                    if not processed_data[ad_id].get("image_permalink_url") or processed_data[ad_id]["image_permalink_url"] != urls.get("permalink", ""):
-                        processed_data[ad_id]["image_permalink_url"] = urls.get("permalink", "")
-                    
-                    # Check if we got URLs - if not, increment priority for next attempt
-                    if not urls.get("url") and not urls.get("permalink"):
-                        processed_data[ad_id]["priority"] = current_priority + 1
-                        print(f"❌ Ad {ad_id}: Image priority {current_priority} failed, will try priority {current_priority + 1} next time")
-                    else:
-                        print(f"✅ Ad {ad_id}: Image priority {current_priority} succeeded")
-        
-        # Process carousel ads (try both video and image)
-        if carousel_ads:
-            carousel_video_ids = []
-            carousel_image_hashes = []
             video_to_ads = {}
             hash_to_ads = {}
             
-            for ad_id, assets in carousel_ads.items():
+            for ad_id, ad_info in mixed_ads.items():
+                assets = ad_info["assets"]
+                ad_type = ad_info["ad_type"]
+                
                 # Get current priority attempt
                 current_priority = processed_data[ad_id].get("priority", 0)
                 
@@ -2047,55 +2043,76 @@ class MetaAdCreativesProcessor:
                 image_assets = [a for a in assets if a[0] == "image"]
                 
                 # Try video at current priority
-                if current_priority < len(video_assets):
+                if video_assets and current_priority < len(video_assets):
                     video_id = video_assets[current_priority][1]
-                    carousel_video_ids.append(video_id)
+                    video_ids.append(video_id)
                     video_to_ads[video_id] = ad_id
                     processed_data[ad_id]["video_id"] = video_id
-                    print(f"🔄 Ad {ad_id}: Carousel trying video priority {current_priority} (video_id: {video_id})")
                 
                 # Try image at current priority
-                if current_priority < len(image_assets):
+                if image_assets and current_priority < len(image_assets):
                     image_hash = image_assets[current_priority][1]
-                    carousel_image_hashes.append(image_hash)
+                    image_hashes.append(image_hash)
                     hash_to_ads[image_hash] = ad_id
                     processed_data[ad_id]["image_hash"] = image_hash
-                    print(f"🔄 Ad {ad_id}: Carousel trying image priority {current_priority} (image_hash: {image_hash})")
                 
                 # If no assets at current priority, increment for next attempt
-                if current_priority >= len(video_assets) and current_priority >= len(image_assets):
-                    print(f"⚠️ Ad {ad_id}: Carousel no more assets to try (current priority: {current_priority})")
+                if (not video_assets or current_priority >= len(video_assets)) and (not image_assets or current_priority >= len(image_assets)):
+                    print(f"⚠️ Ad {ad_id}: No more assets to try (current priority: {current_priority})")
             
-            # Fetch carousel video URLs
-            if carousel_video_ids:
-                video_urls = self.batch_fetch_video_urls(carousel_video_ids)
+            # Track which ads had failed attempts to avoid double incrementing
+            failed_ads = set()
+            
+            # Fetch video URLs
+            if video_ids:
+                video_urls = self.batch_fetch_video_urls(video_ids)
+                print(f"🔍 DEBUG: Retrieved {len(video_urls)} video URLs out of {len(video_ids)} requested")
+                
                 for video_id, urls in video_urls.items():
                     if video_id in video_to_ads:
                         ad_id = video_to_ads[video_id]
                         current_priority = processed_data[ad_id].get("priority", 0)
+                        ad_type = mixed_ads[ad_id]["ad_type"]
                         
                         # Only update if URLs are missing or different
                         if not processed_data[ad_id].get("video_source_url") or processed_data[ad_id]["video_source_url"] != urls.get("source", ""):
                             processed_data[ad_id]["video_source_url"] = urls.get("source", "")
                         if not processed_data[ad_id].get("video_permalink_url") or processed_data[ad_id]["video_permalink_url"] != urls.get("permalink", ""):
                             processed_data[ad_id]["video_permalink_url"] = urls.get("permalink", "")
-                        if urls.get("thumbnail") and not processed_data[ad_id].get("thumbnail_url"):
-                            processed_data[ad_id]["thumbnail_url"] = urls["thumbnail"]
+                        # Store high-quality video thumbnail
+                        if urls.get("thumbnail"):
+                            processed_data[ad_id]["video_thumbnail_url"] = urls["thumbnail"]
                         
                         # Check if we got URLs - if not, increment priority for next attempt
-                        if not urls.get("source") and not urls.get("permalink"):
-                            processed_data[ad_id]["priority"] = current_priority + 1
-                            print(f"❌ Ad {ad_id}: Carousel video priority {current_priority} failed, will try priority {current_priority + 1} next time")
+                        source_url = urls.get("source", "")
+                        permalink_url = urls.get("permalink", "")
+                        print(f"🔍 DEBUG: Ad {ad_id} video URLs - source: '{source_url}', permalink: '{permalink_url}'")
+                        
+                        if not source_url and not permalink_url:
+                            failed_ads.add(ad_id)
+                            print(f"🚨 Ad {ad_id} video priority {current_priority} failed")
                         else:
-                            print(f"✅ Ad {ad_id}: Carousel video priority {current_priority} succeeded")
+                            print(f"✅ Ad {ad_id}: Video priority {current_priority} succeeded with URLs: {urls}")
+                
+                # Handle failed video URL fetches (when video_urls is empty)
+                if not video_urls and video_ids:
+                    print(f"🚨 All video URL fetches failed for {len(video_ids)} videos - marking ads as failed")
+                    for video_id in video_ids:
+                        if video_id in video_to_ads:
+                            ad_id = video_to_ads[video_id]
+                            failed_ads.add(ad_id)
+                            print(f"🚨 Ad {ad_id} video priority failed (URL fetch failed)")
             
-            # Fetch carousel image URLs
-            if carousel_image_hashes:
-                image_urls = self.batch_fetch_image_urls(carousel_image_hashes)
+            # Fetch image URLs
+            if image_hashes:
+                image_urls = self.batch_fetch_image_urls(image_hashes)
+                print(f"🔍 DEBUG: Retrieved {len(image_urls)} image URLs out of {len(image_hashes)} requested")
+                
                 for image_hash, urls in image_urls.items():
                     if image_hash in hash_to_ads:
                         ad_id = hash_to_ads[image_hash]
                         current_priority = processed_data[ad_id].get("priority", 0)
+                        ad_type = mixed_ads[ad_id]["ad_type"]
                         
                         # Only update if URLs are missing or different
                         if not processed_data[ad_id].get("image_url") or processed_data[ad_id]["image_url"] != urls.get("url", ""):
@@ -2103,41 +2120,124 @@ class MetaAdCreativesProcessor:
                         if not processed_data[ad_id].get("image_permalink_url") or processed_data[ad_id]["image_permalink_url"] != urls.get("permalink", ""):
                             processed_data[ad_id]["image_permalink_url"] = urls.get("permalink", "")
                         
-                        # Check if we got URLs - if not, increment priority for next attempt
-                        if not urls.get("url") and not urls.get("permalink"):
-                            processed_data[ad_id]["priority"] = current_priority + 1
-                            print(f"❌ Ad {ad_id}: Carousel image priority {current_priority} failed, will try priority {current_priority + 1} next time")
+                        # Check if we got URLs - if not, mark as failed
+                        image_url = urls.get("url", "")
+                        permalink_url = urls.get("permalink", "")
+                        print(f"🔍 DEBUG: Ad {ad_id} image URLs - url: '{image_url}', permalink: '{permalink_url}'")
+                        
+                        if not image_url and not permalink_url:
+                            failed_ads.add(ad_id)
+                            print(f"🚨 Ad {ad_id} image priority {current_priority} failed")
                         else:
-                            print(f"✅ Ad {ad_id}: Carousel image priority {current_priority} succeeded")
+                            print(f"✅ Ad {ad_id}: Image priority {current_priority} succeeded with URLs: {urls}")
+                
+                # Handle failed image URL fetches (when image_urls is empty)
+                if not image_urls and image_hashes:
+                    print(f"🚨 All image URL fetches failed for {len(image_hashes)} images - marking ads as failed")
+                    for image_hash in image_hashes:
+                        if image_hash in hash_to_ads:
+                            ad_id = hash_to_ads[image_hash]
+                            failed_ads.add(ad_id)
+                            print(f"🚨 Ad {ad_id} image priority failed (URL fetch failed)")
+            
+            # Increment priority for all failed ads (only once per ad)
+            for ad_id in failed_ads:
+                current_priority = processed_data[ad_id].get("priority", 0)
+                processed_data[ad_id]["priority"] = current_priority + 1
+                print(f"🚨 PRIORITY INCREMENT: Ad {ad_id} priority {current_priority} -> {current_priority + 1}")
+                    
+                    
+        
+                # All ads are now processed as mixed (like carousel) - no separate image/carousel processing needed
+                        
         
         print(f"✅ Media URL processing completed")
         return processed_data
     
     def process_ads(self, ad_ids: List[str], ad_types: Dict[str, str], date_from: str, date_to: str) -> Dict:
         """Main processing function following the 6-step process"""
-        print(f"🚀 Processing {len(ad_ids)} ads for media URLs...")
         
-        # Step 1: Load existing processed data and identify missing ads
+        # Step 1: Load existing processed data
         processed_data = self.load_processed_data()  # No date parameters for evolving document
-        missing_ads = self.identify_missing_ads(ad_ids, processed_data)
         
-        print(f"📊 Found {len(missing_ads)} ads needing URL processing")
+        # Identify ads that need raw creative fetching (only new ads that don't exist in master_urls)
+        ads_for_raw_fetch = []
+        for ad_id in ad_ids:
+            ad_id_str = str(ad_id)
+            if ad_id_str not in processed_data:
+                ads_for_raw_fetch.append(ad_id_str)
         
-        if not missing_ads:
-            print("✅ All ads already have media URLs")
-            return processed_data
+        print(f"📊 Found {len(ads_for_raw_fetch)} ads needing raw creative fetching")
         
-        # Steps 2-3: Fetch raw adcreatives (temporary file)
-        raw_data = self.fetch_raw_adcreatives(missing_ads, date_from, date_to)
+        # Steps 2-3: Fetch raw adcreatives for new ads only (temporary file)
+        raw_data = {}
+        if ads_for_raw_fetch:
+            raw_data = self.fetch_raw_adcreatives(ads_for_raw_fetch, date_from, date_to)
+            
+            # Step 4: Add thumbnails to processed data for new ads
+            processed_data = self.add_thumbnails_to_processed(raw_data, processed_data, ads_for_raw_fetch)
         
-        # Step 4: Add thumbnails to processed data
-        processed_data = self.add_thumbnails_to_processed(raw_data, processed_data, missing_ads)
         
-        # Steps 5-6: Process media URLs by ad type
-        processed_data = self.process_media_urls(raw_data, processed_data, ad_types)
+        # Steps 5-6: Process media URLs by ad type (for ALL ads that need URL processing)
+        # This includes both new ads and existing ads that need to try next priority
+        ads_needing_urls = []
+        
+                # Add ads from current report that need URL processing
+        current_ad_ids = set(str(ad_id) for ad_id in ad_ids)
+        
+        for ad_id_str, ad_data in processed_data.items():
+            # Only process ads that are in the current report
+            if ad_id_str not in current_ad_ids:
+                continue
+                
+            has_video_urls = bool(ad_data.get("video_source_url") or ad_data.get("video_permalink_url"))
+            has_image_urls = bool(ad_data.get("image_url") or ad_data.get("image_permalink_url"))
+            current_priority = ad_data.get("priority", 0)
+            max_priority_attempts = ad_data.get("max_priority_attempts", 0)
+            
+            # Include if we don't have URLs yet or haven't exhausted attempts
+            if not (has_video_urls or has_image_urls) or (max_priority_attempts > 0 and current_priority < max_priority_attempts - 1):
+                ads_needing_urls.append(ad_id_str)
+                
+                # Debug: Log ads with no URLs but priority 0
+                if not (has_video_urls or has_image_urls) and current_priority == 0:
+                    print(f"🔍 DEBUG: Ad {ad_id_str} has no URLs but priority 0 - will be processed")
+                elif not (has_video_urls or has_image_urls) and current_priority > 0:
+                    print(f"🔍 DEBUG: Ad {ad_id_str} has no URLs and priority {current_priority} - will be processed")
+        
+        if ads_needing_urls:
+            print(f"🔄 Processing URLs for {len(ads_needing_urls)} ads (including existing ads with failed attempts)")
+            
+            # Debug: Show some examples of ads being processed
+            print(f"📋 Examples of ads being processed:")
+            for i, ad_id in enumerate(ads_needing_urls[:5]):
+                if ad_id in processed_data:
+                    ad_data = processed_data[ad_id]
+                    has_video = bool(ad_data.get("video_source_url") or ad_data.get("video_permalink_url"))
+                    has_image = bool(ad_data.get("image_url") or ad_data.get("image_permalink_url"))
+                    priority = ad_data.get("priority", 0)
+                    max_attempts = ad_data.get("max_priority_attempts", 0)
+                    print(f"  - Ad {ad_id}: priority={priority}, max_attempts={max_attempts}, has_video={has_video}, has_image={has_image}")
+                else:
+                    print(f"  - Ad {ad_id}: NEW AD (not in processed_data)")
+            
+            processed_data = self.process_media_urls(raw_data, processed_data, ad_types)
+        else:
+            print("⚠️ No ads need URL processing")
         
         # Save final processed data (evolving document)
         self.save_processed_data(processed_data)
+        
+        # Debug: Check if any priorities were updated
+        priority_updates = 0
+        for ad_id, ad_data in processed_data.items():
+            if ad_data.get("priority", 0) > 0:
+                priority_updates += 1
+        
+        if priority_updates > 0:
+            print(f"💾 Saved {priority_updates} ads with priority > 0 to master_urls")
+        else:
+            print(f"💾 Saved master_urls (all priorities are 0)")
         
         # Summary
         total_with_media = sum(1 for ad in processed_data.values() 
@@ -2183,8 +2283,8 @@ SCOPES = ['https://www.googleapis.com/auth/drive']
 GENERATE_GOOGLE_DOC = True  # Set to True to generate Google Doc from web display
 
 # Default configuration values - these will be overridden by frontend inputs
-DEFAULT_DATE_FROM = "2025-06-01"
-DEFAULT_DATE_TO = "2025-06-01"
+DEFAULT_DATE_FROM = date.today().strftime("%Y-%m-%d")
+DEFAULT_DATE_TO = date.today().strftime("%Y-%m-%d")
 DEFAULT_TOP_N = 5
 DEFAULT_CORE_PRODUCTS = [["LLEM", "Mascara"], ["BEB"], ["IWEL"], ["BrowGel"], ["LipTint"]]
 
@@ -2733,27 +2833,26 @@ def display_summary_tab(ad_objects, top_n=DEFAULT_TOP_N):
     else:
         ad_list = ad_objects
     
-    print(f"DEBUG: Processing {len(ad_list)} ads for display")
     
     # Merge ads with same name regardless of campaign for All Ads view
     merged_ads = merge_ads_with_same_name(ad_list, merge_by_campaign_type=False)
-    print(f"DEBUG: After merging, {len(merged_ads)} unique ads")
     
     for ad in merged_ads:
         # Get URL for the primary ad_id (first one in the merged group)
         ad_id = ad['ad_ids'].get('ad_id', '')
         ad_type = ad['metadata'].get('ad_type', 'Unknown')
-        link_url = get_ad_url(ad_id, ad_type) if ad_id else ""
+        primary_url, thumbnail_url = get_ad_url(ad_id, ad_type) if ad_id else ("", "")
         
         ads_data.append({
-            'Link': link_url,  # Will be empty if not found in processed file
+            'Link': primary_url,  # Will be empty if not found in processed file
+            'Thumbnail': thumbnail_url,  # Hidden fallback column
             'Ad Name': ad['ad_ids']['ad_name'],
+            'Merged': ad.get('merged_count', 1),  # Show how many ads were merged
             'Campaign Type': ad['metadata'].get('campaign_type', 'Unknown'),
             'Product': ad['metadata'].get('product', 'Unknown'),
             'Ad Type': ad['metadata'].get('ad_type', 'Unknown'),
             'Creator': ad['metadata'].get('creator', 'Unknown'),
             'Agency': ad['metadata'].get('agency', 'Unknown'),
-            'Merged Count': ad.get('merged_count', 1),  # Show how many ads were merged
             'Spend': get_metric_value(ad, 'spend'),
             'Revenue': get_metric_value(ad, 'attributed_rev'),
             'Transactions': get_metric_value(ad, 'transactions'),
@@ -2773,8 +2872,23 @@ def display_summary_tab(ad_objects, top_n=DEFAULT_TOP_N):
     # Show top N ads
     top_ads_df = ads_df.head(top_n)
     
+    # Remove Link Type column from display (keep it for emoji logic)
+    display_columns = [col for col in top_ads_df.columns if col != 'Link Type']
+    top_ads_df = top_ads_df[display_columns]
+    
+    # Create display dataframe with fallback logic
+    display_df = top_ads_df.copy()
+    
+    # Use thumbnail as fallback when Link is empty
+    for idx, row in display_df.iterrows():
+        if not row['Link'] and row['Thumbnail']:
+            display_df.at[idx, 'Link'] = row['Thumbnail']
+    
+    # Remove Thumbnail column from display
+    display_df = display_df[[col for col in display_df.columns if col != 'Thumbnail']]
+    
     st.dataframe(
-        top_ads_df,
+        display_df,
         column_config={
             "Link": st.column_config.LinkColumn(
                 "Link",
@@ -2782,13 +2896,25 @@ def display_summary_tab(ad_objects, top_n=DEFAULT_TOP_N):
                 display_text="🔗"
             )
         },
-        use_container_width=True
+        use_container_width=True,
+        hide_index=True
     )
     
     # Show all ads in expander
     with st.expander(f"📊 Show all {len(ads_df)} ads"):
+        # Create display dataframe with fallback logic
+        display_ads_df = ads_df.copy()
+        
+        # Use thumbnail as fallback when Link is empty
+        for idx, row in display_ads_df.iterrows():
+            if not row['Link'] and row['Thumbnail']:
+                display_ads_df.at[idx, 'Link'] = row['Thumbnail']
+        
+        # Remove Thumbnail column from display
+        display_ads_df = display_ads_df[[col for col in display_ads_df.columns if col != 'Thumbnail']]
+        
         st.dataframe(
-            ads_df,
+            display_ads_df,
             column_config={
                 "Link": st.column_config.LinkColumn(
                     "Link",
@@ -2796,7 +2922,8 @@ def display_summary_tab(ad_objects, top_n=DEFAULT_TOP_N):
                     display_text="🔗"
                 )
             },
-            use_container_width=True
+            use_container_width=True,
+            hide_index=True
         )
     
     st.markdown("---")
@@ -2908,17 +3035,18 @@ def display_all_ads_tab(ad_objects):
                 # Get ad URL from processed data (use primary ad_id from merged group)
                 ad_id = ad['ad_ids'].get('ad_id', '')
                 ad_type = ad['metadata'].get('ad_type', 'Unknown')
-                link_url = get_ad_url(ad_id, ad_type) if ad_id else ""
+                primary_url, thumbnail_url = get_ad_url(ad_id, ad_type) if ad_id else ("", "")
                 
                 ads_data.append({
-                    'Link': link_url,
+                    'Link': primary_url,
+                    'Ad Type': ad['metadata'].get('ad_type', 'Unknown'),
+                    'Thumbnail': thumbnail_url,  # Hidden fallback column
                     'Ad Name': ad['ad_ids'].get('ad_name', 'Unknown'),
+                    'Merged': ad.get('merged_count', 1),  # Show how many ads were merged
                     'Campaign Type': ad['metadata'].get('campaign_type', 'Unknown'),
                     'Product': ad['metadata'].get('product', 'Unknown'),
-                    'Ad Type': ad['metadata'].get('ad_type', 'Unknown'),
                     'Creator': ad['metadata'].get('creator', 'Unknown'),
                     'Agency': ad['metadata'].get('agency', 'Unknown'),
-                    'Merged Count': ad.get('merged_count', 1),  # Show how many ads were merged
                     'Spend': metrics.get(spend_key, 0),
                     'Revenue': metrics.get(revenue_key, 0),
                     'Transactions': metrics.get(transactions_key, 0),
@@ -2963,13 +3091,24 @@ def display_all_ads_tab(ad_objects):
     # Display all ads without filtering
     display_df = df.copy()
     
-    # Create tabs for different views
+    # Create tabs for deifferent views
     tab1, tab2, tab3 = st.tabs(["📊 All Ads", "👥 Creator Analysis", "📦 Product Analysis"])
     
     with tab1:
         st.subheader(f"📊 All Ads ({len(display_df)} ads)")
         
         # Display the dataframe with clickable URLs
+        # Create display dataframe with fallback logic
+        display_df = df.copy()
+        
+        # Use thumbnail as fallback when Link is empty
+        for idx, row in display_df.iterrows():
+            if not row['Link'] and row['Thumbnail']:
+                display_df.at[idx, 'Link'] = row['Thumbnail']
+        
+        # Remove Thumbnail column from display
+        display_df = display_df[[col for col in display_df.columns if col != 'Thumbnail']]
+        
         st.dataframe(
             display_df,
             column_config={
@@ -2980,7 +3119,8 @@ def display_all_ads_tab(ad_objects):
                 )
             },
             use_container_width=True,
-            height=400
+            height=400,
+            hide_index=True
         )
         
         # Download button
@@ -3396,15 +3536,15 @@ def display_campaign_explorer_tab(ad_objects, top_n=DEFAULT_TOP_N, core_products
                     ads_data = []
                     for ad in product_ads:
                         # Get ad URL from processed data
-                        ad_id = ad['ad_ids'].get('ad_id')
-                        ad_type = ad['metadata'].get('ad_type')  # Use existing ad_type from comprehensive ad object
-                        
-                        # Skip URL lookup initially to show data immediately
-                        link_url = ""
+                        ad_id = ad['ad_ids'].get('ad_id', '')
+                        ad_type = ad['metadata'].get('ad_type', 'Unknown')
+                        primary_url, thumbnail_url = get_ad_url(ad_id, ad_type) if ad_id else ("", "")
 
                         ads_data.append({
-                            'Link': link_url,
+                            'Link': primary_url,
+                            'Thumbnail': thumbnail_url,  # Hidden fallback column
                             'Ad Name': ad['ad_ids']['ad_name'],
+                            'Merged': ad.get('merged_count', 1),  # Show how many ads were merged
                             'Product': ad['metadata'].get('product', 'Unknown'),
                             'Creator': ad['metadata'].get('creator', 'Unknown'),
                             'Agency': ad['metadata'].get('agency', 'Unknown'),
@@ -3443,6 +3583,17 @@ def display_campaign_explorer_tab(ad_objects, top_n=DEFAULT_TOP_N, core_products
                         display_ads_df_formatted['Link Clicks'] = display_ads_df_formatted['Link Clicks'].apply(lambda x: f"{x:,.0f}")
                         display_ads_df_formatted['Video Views'] = display_ads_df_formatted['Video Views'].apply(lambda x: f"{x:,.0f}")
                         
+                        # Create display dataframe with fallback logic
+                        display_ads_df = display_ads_df.copy()
+                        
+                        # Use thumbnail as fallback when Link is empty
+                        for idx, row in display_ads_df.iterrows():
+                            if not row['Link'] and row['Thumbnail']:
+                                display_ads_df.at[idx, 'Link'] = row['Thumbnail']
+                        
+                        # Remove Thumbnail column from display
+                        display_ads_df = display_ads_df[[col for col in display_ads_df.columns if col != 'Thumbnail']]
+                        
                         # Use LinkColumn for clickable URLs
                         st.dataframe(
                             display_ads_df,
@@ -3453,13 +3604,25 @@ def display_campaign_explorer_tab(ad_objects, top_n=DEFAULT_TOP_N, core_products
                                     display_text="🔗"
                                 )
                             },
-                            use_container_width=True
+                            use_container_width=True,
+                            hide_index=True
                         )
                         
                         # Show all ads in expander
                         with st.expander(f"📊 Show all {len(ads_df)} ads"):
+                            # Create display dataframe with fallback logic
+                            display_all_ads_df = ads_df.copy()
+                            
+                            # Use thumbnail as fallback when Link is empty
+                            for idx, row in display_all_ads_df.iterrows():
+                                if not row['Link'] and row['Thumbnail']:
+                                    display_all_ads_df.at[idx, 'Link'] = row['Thumbnail']
+                            
+                            # Remove Thumbnail column from display
+                            display_all_ads_df = display_all_ads_df[[col for col in display_all_ads_df.columns if col != 'Thumbnail']]
+                            
                             st.dataframe(
-                                ads_df,
+                                display_all_ads_df,
                                 column_config={
                                     "Link": st.column_config.LinkColumn(
                                         "Link",
@@ -3467,7 +3630,8 @@ def display_campaign_explorer_tab(ad_objects, top_n=DEFAULT_TOP_N, core_products
                                         display_text="🔗"
                                     )
                                 },
-                                use_container_width=True
+                                use_container_width=True,
+                                hide_index=True
                             )
                     else:
                         st.info("No ads data available for the selected filters.")
@@ -3659,14 +3823,13 @@ def display_product_creator_explorer_tab(ad_objects):
         ads_data = []
         for ad in filtered_ads:
             # Get ad URL from processed data
-            ad_id = ad['ad_ids'].get('ad_id')
-            ad_type = ad['metadata'].get('ad_type')
-            
-            # Skip URL lookup initially to show data immediately
-            link_url = ""
+            ad_id = ad['ad_ids'].get('ad_id', '')
+            ad_type = ad['metadata'].get('ad_type', 'Unknown')
+            primary_url, thumbnail_url = get_ad_url(ad_id, ad_type) if ad_id else ("", "")
             
             ads_data.append({
-                'Link': link_url,
+                'Link': primary_url,
+                'Thumbnail': thumbnail_url,  # Hidden fallback column
                 'Ad Name': ad['ad_ids']['ad_name'],
                 'Campaign Type': ad['metadata'].get('campaign_type', 'Unknown'),
                 'Product': ad['metadata'].get('product', 'Unknown'),
@@ -3715,6 +3878,17 @@ def display_product_creator_explorer_tab(ad_objects):
         if 'Video Views' in display_df_formatted.columns:
             display_df_formatted['Video Views'] = display_df_formatted['Video Views'].apply(lambda x: f"{x:,.0f}")
         
+        # Create display dataframe with fallback logic
+        display_df_formatted = display_df_formatted.copy()
+        
+        # Use thumbnail as fallback when Link is empty
+        for idx, row in display_df_formatted.iterrows():
+            if not row['Link'] and row['Thumbnail']:
+                display_df_formatted.at[idx, 'Link'] = row['Thumbnail']
+        
+        # Remove Thumbnail column from display
+        display_df_formatted = display_df_formatted[[col for col in display_df_formatted.columns if col != 'Thumbnail']]
+        
         st.dataframe(
             display_df_formatted,
             column_config={
@@ -3724,7 +3898,8 @@ def display_product_creator_explorer_tab(ad_objects):
                     display_text="🔗"
                 )
             },
-            use_container_width=True
+            use_container_width=True,
+            hide_index=True
         )
         
         # Download button
@@ -3901,10 +4076,7 @@ def main():
                 
                 # Merge ads with same name (if enabled)
                 if merge_ads:
-                    print(f"DEBUG: Applying merge_ads_with_same_name (merge_ads={merge_ads})")
                     comprehensive_ads = merge_ads_with_same_name(comprehensive_ads, merge_by_campaign_type=True)
-                else:
-                    print(f"DEBUG: Skipping merge (merge_ads={merge_ads})")
                 
                 # Clean any remaining NaN values
                 comprehensive_ads = clean_nan_values(comprehensive_ads)
@@ -3935,12 +4107,6 @@ def main():
                         'date_from_formatted': date_from_formatted,
                         'date_to_formatted': date_to_formatted
                     }
-                    
-                    # Debug logging
-                    print(f"DEBUG: Stored {len(comprehensive_ads)} ads in session state")
-                    print(f"DEBUG: Session state comprehensive_ads type: {type(st.session_state.comprehensive_ads)}")
-                    if comprehensive_ads:
-                        print(f"DEBUG: First ad sample: {comprehensive_ads[:3] if isinstance(comprehensive_ads, list) else list(comprehensive_ads.keys())[:3]}")
                     
                 if comprehensive_ads:
                     st.success(f"✅ Report generated successfully! {len(comprehensive_ads)} ads processed.")
@@ -3976,7 +4142,6 @@ def main():
                     ad_types[str(ad_id)] = ad_type
             
             if ad_ids:
-                print(f"🎬 Starting background Meta ad creatives processing for {len(ad_ids)} ads...")
                 
                 # Get Meta API credentials from environment or config
                 access_token = os.getenv('META_SYSTEM_USER_ACCESS_TOKEN')
@@ -4078,15 +4243,12 @@ def main():
         tab1, tab2, tab3 = st.tabs(["📊 All Ads Summary", "🎯 Campaign Explorer", "🔍 Product/Creator Explorer"])
         
         with tab1:
-            print(f"DEBUG: Displaying summary tab with {len(st.session_state.comprehensive_ads) if st.session_state.comprehensive_ads else 0} ads")
             display_summary_tab(st.session_state.comprehensive_ads, config['top_n'])
         
         with tab2:
-            print(f"DEBUG: Displaying campaign explorer tab with {len(st.session_state.comprehensive_ads) if st.session_state.comprehensive_ads else 0} ads")
             display_campaign_explorer_tab(st.session_state.comprehensive_ads, config['top_n'], config['core_products_input'])
         
         with tab3:
-            print(f"DEBUG: Displaying product creator explorer tab with {len(st.session_state.comprehensive_ads) if st.session_state.comprehensive_ads else 0} ads")
             display_product_creator_explorer_tab(st.session_state.comprehensive_ads)
     
     else:
@@ -4142,7 +4304,6 @@ def get_processed_data_cache():
                     try:
                         processed_data = load_json_from_s3(most_recent_key)
                         if processed_data:
-                            print(f"✅ Loaded most recent master URLs from S3: {most_recent_key}")
                             _processed_data_cache = processed_data
                             return processed_data
                     except Exception as e:
@@ -4209,60 +4370,67 @@ def clear_processed_data_cache():
     _CACHE_LOADED = False
     print("🔄 Cleared processed data cache")
 
-def get_ad_url(ad_id: str, ad_type: str = None) -> str:
+def get_ad_url(ad_id: str, ad_type: str = None) -> tuple[str, str]:
     """
     Get URL from meta_adcreatives_processed.json based on ad_id and ad_type
+    Returns both primary URL (matching ad type) and thumbnail URL
     
     Args:
         ad_id: The ad ID to look up
         ad_type: The ad type (video, static, carousel) - if None or "Unknown", will try all URL types
     
     Returns:
-        URL string or empty string if not found
+        Tuple of (primary_url, thumbnail_url) where primary_url matches the ad type
     """
     try:
         processed_data = _get_cached_processed_data()
         
         if processed_data is None:
-            return ""
+            return "", ""
         
         ad_id_str = str(ad_id)
         if ad_id_str not in processed_data:
-            return ""
+            return "", ""
         
         ad_data = processed_data[ad_id_str]
         
-        # If ad_type is provided and not "Unknown", try specific URL types
+        # Get thumbnail URL - prefer high-quality video thumbnail if available
+        thumbnail_url = ad_data.get("video_thumbnail_url", "") or ad_data.get("thumbnail_url", "")
+        
+        # Get primary URL based on ad type
+        primary_url = ""
+        
         if ad_type and ad_type.lower() != "unknown":
             # For video ads, prefer permalink_url, then source_url
             if ad_type.lower() in ["video", "carousel"]:
                 if ad_data.get("video_permalink_url"):
-                    return ad_data["video_permalink_url"]
+                    primary_url = ad_data["video_permalink_url"]
                 elif ad_data.get("video_source_url"):
-                    return ad_data["video_source_url"]
+                    primary_url = ad_data["video_source_url"]
             
             # For static/image ads, prefer image permalink_url, then image_url
             elif ad_type.lower() in ["static", "image"]:
                 if ad_data.get("image_permalink_url"):
-                    return ad_data["image_permalink_url"]
+                    primary_url = ad_data["image_permalink_url"]
                 elif ad_data.get("image_url"):
-                    return ad_data["image_url"]
+                    primary_url = ad_data["image_url"]
         
-        # Fallback: try all URL types in order of preference
-        if ad_data.get("video_permalink_url"):
-            return ad_data["video_permalink_url"]
-        elif ad_data.get("video_source_url"):
-            return ad_data["video_source_url"]
-        elif ad_data.get("image_permalink_url"):
-            return ad_data["image_permalink_url"]
-        elif ad_data.get("image_url"):
-            return ad_data["image_url"]
+        # If no type-specific URL found, try all URL types in order of preference
+        if not primary_url:
+            if ad_data.get("video_permalink_url"):
+                primary_url = ad_data["video_permalink_url"]
+            elif ad_data.get("video_source_url"):
+                primary_url = ad_data["video_source_url"]
+            elif ad_data.get("image_permalink_url"):
+                primary_url = ad_data["image_permalink_url"]
+            elif ad_data.get("image_url"):
+                primary_url = ad_data["image_url"]
         
-        return ""
+        return primary_url, thumbnail_url
         
     except Exception as e:
         print(f"Error getting URL for ad {ad_id}: {e}")
-        return ""
+        return "", ""
 
 def detect_ad_type_from_name(ad_name: str) -> str:
     """
