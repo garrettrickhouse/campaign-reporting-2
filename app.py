@@ -4331,16 +4331,40 @@ def main():
                                 config['use_northbeam']
                             )
                             
-                            # Save markdown file temporarily
+                            # Save markdown file to S3 and locally (if enabled)
                             date_from_formatted = config['date_from'].replace('-', '')
                             date_to_formatted = config['date_to'].replace('-', '')
-                            report_filename = f"reports/campaign_analysis_report_{date_from_formatted}-{date_to_formatted}.md"
                             
-                            # Ensure reports directory exists
-                            os.makedirs("reports", exist_ok=True)
+                            # S3 path
+                            s3_key = f"campaign-reporting/reports/campaign_analysis_report_{date_from_formatted}-{date_to_formatted}.md"
                             
-                            with open(report_filename, 'w') as f:
-                                f.write(markdown_content)
+                            # Local path (same directory structure as S3)
+                            local_filename = f"campaign-reporting/reports/campaign_analysis_report_{date_from_formatted}-{date_to_formatted}.md"
+                            
+                            # Save to S3 (always overwrite)
+                            try:
+                                s3_client = get_s3_client()
+                                s3_client.put_object(
+                                    Bucket=S3_BUCKET,
+                                    Key=s3_key,
+                                    Body=markdown_content,
+                                    ContentType='text/markdown'
+                                )
+                                print(f"✅ Saved markdown report to S3: s3://{S3_BUCKET}/{s3_key}")
+                            except Exception as e:
+                                print(f"⚠️ Failed to save markdown report to S3: {e}")
+                            
+                            # Save locally if enabled (always overwrite)
+                            if DOWNLOAD_REPORTS_LOCALLY:
+                                os.makedirs("campaign-reporting/reports", exist_ok=True)
+                                with open(local_filename, 'w') as f:
+                                    f.write(markdown_content)
+                                print(f"💾 Saved markdown report locally: {local_filename}")
+                            else:
+                                print(f"💾 Markdown report saved to S3 only (local saving disabled)")
+                            
+                            # Store the local filename for download button
+                            report_filename = local_filename if DOWNLOAD_REPORTS_LOCALLY else f"reports/campaign_analysis_report_{date_from_formatted}-{date_to_formatted}.md"
                             
                             # Export to Google Doc
                             doc_title = f"Thrive Causemetics Campaign Analysis {config['date_from']} to {config['date_to']}"
@@ -4518,6 +4542,49 @@ def clear_processed_data_cache():
     _PROCESSED_DATA_CACHE = None
     _CACHE_LOADED = False
     print("🔄 Cleared processed data cache")
+
+def list_s3_reports():
+    """List all markdown reports in S3"""
+    try:
+        s3_client = get_s3_client()
+        response = s3_client.list_objects_v2(
+            Bucket=S3_BUCKET,
+            Prefix="campaign-reporting/reports/",
+            MaxKeys=100
+        )
+        
+        reports = []
+        if 'Contents' in response:
+            for obj in response['Contents']:
+                key = obj['Key']
+                if key.endswith('.md') and 'campaign_analysis_report' in key:
+                    # Extract date range from filename
+                    filename = key.split('/')[-1]
+                    if filename.startswith('campaign_analysis_report_'):
+                        date_part = filename.replace('campaign_analysis_report_', '').replace('.md', '')
+                        if '-' in date_part:
+                            date_from, date_to = date_part.split('-')
+                            # Format dates for display
+                            try:
+                                date_from_formatted = f"{date_from[:4]}-{date_from[4:6]}-{date_from[6:8]}"
+                                date_to_formatted = f"{date_to[:4]}-{date_to[4:6]}-{date_to[6:8]}"
+                                reports.append({
+                                    'key': key,
+                                    'filename': filename,
+                                    'date_from': date_from_formatted,
+                                    'date_to': date_to_formatted,
+                                    'last_modified': obj['LastModified']
+                                })
+                            except:
+                                # Skip if date parsing fails
+                                continue
+        
+        # Sort by last modified (newest first)
+        reports.sort(key=lambda x: x['last_modified'], reverse=True)
+        return reports
+    except Exception as e:
+        print(f"⚠️ Error listing S3 reports: {e}")
+        return []
 
 def get_ad_url(ad_id: str, ad_type: str = None) -> tuple[str, str]:
     """
