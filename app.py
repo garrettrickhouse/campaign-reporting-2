@@ -2897,11 +2897,11 @@ def display_summary_tab(ad_objects, top_n=DEFAULT_TOP_N):
         ads_data.append({
             'Link': primary_url,  # Will be empty if not found in processed file
             'Thumbnail': thumbnail_url,  # Hidden fallback column
+            'Ad Type': ad['metadata'].get('ad_type', 'Unknown'),
             'Ad Name': ad['ad_ids']['ad_name'],
             'Merged': ad.get('merged_count', 1),  # Show how many ads were merged
             'Campaign Type': ad['metadata'].get('campaign_type', 'Unknown'),
             'Product': ad['metadata'].get('product', 'Unknown'),
-            'Ad Type': ad['metadata'].get('ad_type', 'Unknown'),
             'Creator': ad['metadata'].get('creator', 'Unknown'),
             'Agency': ad['metadata'].get('agency', 'Unknown'),
             'Spend': get_metric_value(ad, 'spend'),
@@ -3001,21 +3001,35 @@ def display_summary_tab(ad_objects, top_n=DEFAULT_TOP_N):
     
     # Top N Creators table
     st.subheader(f"👥 Top {top_n} Creators")
-    creators_df = calculate_aggregated_metrics(ad_objects, 'creator', 10000)  # Get all creators
     
-    if not creators_df.empty:
+    # Group by creator using the same approach as other tabs
+    creators_grouped_df = ads_df.groupby('Creator').agg({
+        'Spend': 'sum',
+        'Revenue': 'sum',
+        'Transactions': 'sum',
+        'Impressions': 'sum',
+        'Link Clicks': 'sum',
+        'Video Views': 'sum'
+    }).reset_index()
+    
+    # Calculate derived metrics for grouped data
+    creators_grouped_df['ROAS'] = creators_grouped_df['Revenue'] / creators_grouped_df['Spend']
+    creators_grouped_df['CTR'] = (creators_grouped_df['Link Clicks'] / creators_grouped_df['Impressions'] * 100).fillna(0)
+    creators_grouped_df['CPM'] = (creators_grouped_df['Spend'] / creators_grouped_df['Impressions'] * 1000).fillna(0)
+    creators_grouped_df['Thumbstop'] = (creators_grouped_df['Video Views'] / creators_grouped_df['Impressions'] * 100).fillna(0)
+    creators_grouped_df['AOV'] = (creators_grouped_df['Revenue'] / creators_grouped_df['Transactions']).fillna(0)
+    
+    # Sort by spend (descending)
+    creators_grouped_df = creators_grouped_df.sort_values('Spend', ascending=False)
+    
+    if not creators_grouped_df.empty:
         # Show top N creators
-        top_creators_df = creators_df.head(top_n)
-        # Capitalize the creator column name
-        top_creators_df_display = top_creators_df.reset_index()
-        top_creators_df_display.columns = ['Creator'] + list(top_creators_df_display.columns[1:])
-        st.dataframe(top_creators_df_display, use_container_width=True, hide_index=True)
+        top_creators_df = creators_grouped_df.head(top_n)
+        st.dataframe(top_creators_df, use_container_width=True, hide_index=True)
         
         # Show all creators in expander
-        with st.expander(f"👥 Show all {len(creators_df)} creators"):
-            all_creators_df_display = creators_df.reset_index()
-            all_creators_df_display.columns = ['Creator'] + list(all_creators_df_display.columns[1:])
-            st.dataframe(all_creators_df_display, use_container_width=True, hide_index=True)
+        with st.expander(f"👥 Show all {len(creators_grouped_df)} creators"):
+            st.dataframe(creators_grouped_df, use_container_width=True, hide_index=True)
     
     st.markdown("---")
     
@@ -3604,6 +3618,7 @@ def display_campaign_explorer_tab(ad_objects, top_n=DEFAULT_TOP_N, core_products
                         ads_data.append({
                             'Link': primary_url,
                             'Thumbnail': thumbnail_url,  # Hidden fallback column
+                            'Ad Type': ad['metadata'].get('ad_type', 'Unknown'),
                             'Ad Name': ad['ad_ids']['ad_name'],
                             'Merged': ad.get('merged_count', 1),  # Show how many ads were merged
                             'Product': ad['metadata'].get('product', 'Unknown'),
@@ -3702,20 +3717,31 @@ def display_campaign_explorer_tab(ad_objects, top_n=DEFAULT_TOP_N, core_products
                     # Top N Creators for selected campaign and product
                     st.subheader(f"👥 Top {top_n} Creators")
                     
-                    # Calculate aggregated metrics for creators (get all creators, not just top N)
-                    # We need to bypass the top_n limit in the function to get all creators
-                    creators_df = calculate_aggregated_metrics(product_ads, 'creator', 10000)  # Large number to get all creators
-                    # Ensure proper sorting by raw numeric values
-                    if not creators_df.empty:
-                        creators_df = creators_df.sort_values('Spend', ascending=False)
+                    # Group by creator using the same approach as All Ads tab
+                    creators_grouped_df = ads_df.groupby('Creator').agg({
+                        'Spend': 'sum',
+                        'Revenue': 'sum',
+                        'Transactions': 'sum',
+                        'Impressions': 'sum',
+                        'Link Clicks': 'sum',
+                        'Video Views': 'sum'
+                    }).reset_index()
+                    
+                    # Calculate derived metrics for grouped data
+                    creators_grouped_df['ROAS'] = creators_grouped_df['Revenue'] / creators_grouped_df['Spend']
+                    creators_grouped_df['CTR'] = (creators_grouped_df['Link Clicks'] / creators_grouped_df['Impressions'] * 100).fillna(0)
+                    creators_grouped_df['CPM'] = (creators_grouped_df['Spend'] / creators_grouped_df['Impressions'] * 1000).fillna(0)
+                    creators_grouped_df['Thumbstop'] = (creators_grouped_df['Video Views'] / creators_grouped_df['Impressions'] * 100).fillna(0)
+                    creators_grouped_df['AOV'] = (creators_grouped_df['Revenue'] / creators_grouped_df['Transactions']).fillna(0)
+                    
+                    # Sort by spend (descending)
+                    creators_grouped_df = creators_grouped_df.sort_values('Spend', ascending=False)
                     
                     # Show top N creators by default
-                    display_creators_df = creators_df.head(top_n).copy()
+                    display_creators_df = creators_grouped_df.head(top_n).copy()
                     
                     if not display_creators_df.empty:
-                        # Reset index to get creator names as a column
-                        display_creators_df = display_creators_df.reset_index()
-                        
+                        # Format the dataframe for display
                         display_creators_df_formatted = display_creators_df.copy()
                         display_creators_df_formatted['Spend'] = display_creators_df_formatted['Spend'].apply(format_currency)
                         display_creators_df_formatted['ROAS'] = display_creators_df_formatted['ROAS'].apply(lambda x: f"{x:.2f}")
@@ -3724,17 +3750,13 @@ def display_campaign_explorer_tab(ad_objects, top_n=DEFAULT_TOP_N, core_products
                         display_creators_df_formatted['Thumbstop'] = display_creators_df_formatted['Thumbstop'].apply(lambda x: f"{x:.2f}%")
                         display_creators_df_formatted['AOV'] = display_creators_df_formatted['AOV'].apply(lambda x: f"${x:.2f}")
                         
-                        # Drop the extra columns for display
-                        display_creators_df_formatted = display_creators_df_formatted[['creator', 'Spend', 'ROAS', 'CTR', 'CPM', 'Thumbstop', 'AOV']]
-                        display_creators_df_formatted.columns = ['Creator', 'Spend', 'ROAS', 'CTR', 'CPM', 'Thumbstop', 'AOV']
-                        
                         # Use raw numbers for proper sorting, let Streamlit handle display
                         st.dataframe(display_creators_df, use_container_width=True, hide_index=True)
                         
                         # Show all creators in expander
-                        with st.expander(f"👥 Show all {len(creators_df)} creators"):
-                            # Reset index for all creators dataframe
-                            all_creators_formatted = creators_df.reset_index().copy()
+                        with st.expander(f"👥 Show all {len(creators_grouped_df)} creators"):
+                            # Format all creators dataframe
+                            all_creators_formatted = creators_grouped_df.copy()
                             all_creators_formatted['Spend'] = all_creators_formatted['Spend'].apply(format_currency)
                             all_creators_formatted['ROAS'] = all_creators_formatted['ROAS'].apply(lambda x: f"{x:.2f}")
                             all_creators_formatted['CTR'] = all_creators_formatted['CTR'].apply(lambda x: f"{x:.2f}%")
@@ -3742,12 +3764,8 @@ def display_campaign_explorer_tab(ad_objects, top_n=DEFAULT_TOP_N, core_products
                             all_creators_formatted['Thumbstop'] = all_creators_formatted['Thumbstop'].apply(lambda x: f"{x:.2f}%")
                             all_creators_formatted['AOV'] = all_creators_formatted['AOV'].apply(lambda x: f"${x:.2f}")
                             
-                            # Drop the extra columns for display
-                            all_creators_formatted = all_creators_formatted[['creator', 'Spend', 'ROAS', 'CTR', 'CPM', 'Thumbstop', 'AOV']]
-                            all_creators_formatted.columns = ['Creator', 'Spend', 'ROAS', 'CTR', 'CPM', 'Thumbstop', 'AOV']
-                            
                             # Use raw numbers for proper sorting, let Streamlit handle display
-                            st.dataframe(creators_df, use_container_width=True, hide_index=True)
+                            st.dataframe(creators_grouped_df, use_container_width=True, hide_index=True)
                     else:
                         st.info("No creator data available for the selected filters.")
 
@@ -3891,10 +3909,10 @@ def display_product_creator_explorer_tab(ad_objects):
             ads_data.append({
                 'Link': primary_url,
                 'Thumbnail': thumbnail_url,  # Hidden fallback column
+                'Ad Type': ad['metadata'].get('ad_type', 'Unknown'),
                 'Ad Name': ad['ad_ids']['ad_name'],
                 'Campaign Type': ad['metadata'].get('campaign_type', 'Unknown'),
                 'Product': ad['metadata'].get('product', 'Unknown'),
-                'Ad Type': ad['metadata'].get('ad_type', 'Unknown'),
                 'Creator': ad['metadata'].get('creator', 'Unknown'),
                 'Agency': ad['metadata'].get('agency', 'Unknown'),
                 'Spend': get_metric_value(ad, 'spend'),

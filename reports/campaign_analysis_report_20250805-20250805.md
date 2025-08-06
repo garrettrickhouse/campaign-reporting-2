@@ -460,7 +460,7 @@
 | 2 | a:BEB_b:NoModel-BEB-ProdAnimation-1x1-ReturnCustomerShadeGridIterations-RHM1260V3_c:ProdAnimation_d:_e:Static_f:BEBDuo_g:250530_h:RHM | $29.84 | 3.605653x | 1.05% | $7.61 | 0.4% | $107.60 |
 | 3 | a:BEB_b:TH1598-Wendy-SummerLookBEBStella&Emma-B_c:ProdApp_d:_e:Video_f:PDP_g:250716_h:NRTV2025 | $11.52 | 0.000000x | 2.02% | $15.53 | 24.7% | $0.00 |
 | 4 | a:BEB_b:NoModel-BEB-ProdAnimation-1x1-ReturnCustomerShadeGridIterations-RHM1260V2_c:ProdAnimation_d:_e:Static_f:BEBDuo_g:250530_h:RHM | $6.60 | 0.000000x | 1.10% | $8.07 | 0.4% | $0.00 |
-| 5 | a:BEB_b:CDehart-BEB-ProdApp-1x1-Jimena-TopperLaunch-V1_c:ProdApp_d:NEWChromeShades_e:Video_f:PDP_g:241023 | $0.00 | 0.000000x | 0.00% | $0.00 | 0.0% | $0.00 |
+| 5 | a:BEB_b:NoModel-BEB-ProdAnimation-1x1-ReturnCustomerShadeGridIterations-RHM1260V4_c:ProdAnimation_d:_e:Static_f:BEBDuo_g:250530_h:RHM | $0.00 | 0.000000x | 0.00% | $0.00 | 0.0% | $0.00 |
 
 
 **Top Creators by Spend:**
