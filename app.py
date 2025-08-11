@@ -917,11 +917,9 @@ def fetch_all_data_sequentially(date_from=None, date_to=None):
         missing_files = []
         if meta_insights is None:
             missing_files.append("Meta insights")
-            print(f"❌ Missing cached Meta insights {date_from} to {date_to}")
 
         if northbeam_df is None:
             missing_files.append("Northbeam data")
-            print(f"❌ Missing cached Northbeam data {date_from} to {date_to}")
 
         if not missing_files:
             print("✅ All required cached files found - using existing data only")
@@ -2901,6 +2899,7 @@ def display_summary_tab(ad_objects, top_n=DEFAULT_TOP_N):
             'Thumbstop': (get_metric_value(ad, 'meta_3s_video_views') / get_metric_value(ad, 'impressions') * 100) if get_metric_value(ad, 'impressions') > 0 else 0,
             'AOV': get_metric_value(ad, 'attributed_rev') / get_metric_value(ad, 'transactions') if get_metric_value(ad, 'transactions') > 0 else 0
         })
+
     
     ads_df = pd.DataFrame(ads_data)
     ads_df = ads_df.sort_values('Spend', ascending=False)
@@ -2922,6 +2921,19 @@ def display_summary_tab(ad_objects, top_n=DEFAULT_TOP_N):
     
     # Remove Thumbnail column from display
     display_df = display_df[[col for col in display_df.columns if col != 'Thumbnail']]
+    
+    # Format numerical columns for better readability
+    display_df['Spend'] = display_df['Spend'].apply(format_currency)
+    display_df['Revenue'] = display_df['Revenue'].apply(format_currency)
+    display_df['ROAS'] = display_df['ROAS'].apply(format_roas)
+    display_df['CTR'] = display_df['CTR'].apply(format_percentage)
+    display_df['CPM'] = display_df['CPM'].apply(format_currency)
+    display_df['Thumbstop'] = display_df['Thumbstop'].apply(format_percentage)
+    display_df['AOV'] = display_df['AOV'].apply(format_currency)
+    display_df['Impressions'] = display_df['Impressions'].apply(lambda x: f"{x:,.0f}")
+    display_df['Link Clicks'] = display_df['Link Clicks'].apply(lambda x: f"{x:,.0f}")
+    display_df['Video Views'] = display_df['Video Views'].apply(lambda x: f"{x:,.0f}")
+    display_df['Transactions'] = display_df['Transactions'].apply(lambda x: f"{x:,.0f}")
     
     st.dataframe(
         display_df,
@@ -2949,6 +2961,19 @@ def display_summary_tab(ad_objects, top_n=DEFAULT_TOP_N):
         # Remove Thumbnail column from display
         display_ads_df = display_ads_df[[col for col in display_ads_df.columns if col != 'Thumbnail']]
         
+        # Format numerical columns for better readability
+        display_ads_df['Spend'] = display_ads_df['Spend'].apply(format_currency)
+        display_ads_df['Revenue'] = display_ads_df['Revenue'].apply(format_currency)
+        display_ads_df['ROAS'] = display_ads_df['ROAS'].apply(format_roas)
+        display_ads_df['CTR'] = display_ads_df['CTR'].apply(format_percentage)
+        display_ads_df['CPM'] = display_ads_df['CPM'].apply(format_currency)
+        display_ads_df['Thumbstop'] = display_ads_df['Thumbstop'].apply(format_percentage)
+        display_ads_df['AOV'] = display_ads_df['AOV'].apply(format_currency)
+        display_ads_df['Impressions'] = display_ads_df['Impressions'].apply(lambda x: f"{x:,.0f}")
+        display_ads_df['Link Clicks'] = display_ads_df['Link Clicks'].apply(lambda x: f"{x:,.0f}")
+        display_ads_df['Video Views'] = display_ads_df['Video Views'].apply(lambda x: f"{x:,.0f}")
+        display_ads_df['Transactions'] = display_ads_df['Transactions'].apply(lambda x: f"{x:,.0f}")
+        
         st.dataframe(
             display_ads_df,
             column_config={
@@ -2974,12 +2999,40 @@ def display_summary_tab(ad_objects, top_n=DEFAULT_TOP_N):
         # Capitalize the product column name
         top_products_df_display = top_products_df.reset_index()
         top_products_df_display.columns = ['Product'] + list(top_products_df_display.columns[1:])
+        
+        # Format numerical columns for better readability
+        top_products_df_display['Spend'] = top_products_df_display['Spend'].apply(format_currency)
+        top_products_df_display['Revenue'] = top_products_df_display['Revenue'].apply(format_currency)
+        top_products_df_display['ROAS'] = top_products_df_display['ROAS'].apply(format_roas)
+        top_products_df_display['CTR'] = top_products_df_display['CTR'].apply(format_percentage)
+        top_products_df_display['CPM'] = top_products_df_display['CPM'].apply(format_currency)
+        top_products_df_display['Thumbstop'] = top_products_df_display['Thumbstop'].apply(format_percentage)
+        top_products_df_display['AOV'] = top_products_df_display['AOV'].apply(format_currency)
+        top_products_df_display['Impressions'] = top_products_df_display['Impressions'].apply(lambda x: f"{x:,.0f}")
+        top_products_df_display['Link Clicks'] = top_products_df_display['Link Clicks'].apply(lambda x: f"{x:,.0f}")
+        top_products_df_display['Video Views'] = top_products_df_display['Video Views'].apply(lambda x: f"{x:,.0f}")
+        top_products_df_display['Transactions'] = top_products_df_display['Transactions'].apply(lambda x: f"{x:,.0f}")
+        
         st.dataframe(top_products_df_display, use_container_width=True, hide_index=True)
         
         # Show all products in expander
         with st.expander(f"📦 Show all {len(products_df)} products"):
             all_products_df_display = products_df.reset_index()
             all_products_df_display.columns = ['Product'] + list(all_products_df_display.columns[1:])
+            
+            # Format numerical columns for better readability
+            all_products_df_display['Spend'] = all_products_df_display['Spend'].apply(format_currency)
+            all_products_df_display['Revenue'] = all_products_df_display['Revenue'].apply(format_currency)
+            all_products_df_display['ROAS'] = all_products_df_display['ROAS'].apply(format_roas)
+            all_products_df_display['CTR'] = all_products_df_display['CTR'].apply(format_percentage)
+            all_products_df_display['CPM'] = all_products_df_display['CPM'].apply(format_currency)
+            all_products_df_display['Thumbstop'] = all_products_df_display['Thumbstop'].apply(format_percentage)
+            all_products_df_display['AOV'] = all_products_df_display['AOV'].apply(format_currency)
+            all_products_df_display['Impressions'] = all_products_df_display['Impressions'].apply(lambda x: f"{x:,.0f}")
+            all_products_df_display['Link Clicks'] = all_products_df_display['Link Clicks'].apply(lambda x: f"{x:,.0f}")
+            all_products_df_display['Video Views'] = all_products_df_display['Video Views'].apply(lambda x: f"{x:,.0f}")
+            all_products_df_display['Transactions'] = all_products_df_display['Transactions'].apply(lambda x: f"{x:,.0f}")
+            
             st.dataframe(all_products_df_display, use_container_width=True, hide_index=True)
     
     st.markdown("---")
@@ -3010,10 +3063,37 @@ def display_summary_tab(ad_objects, top_n=DEFAULT_TOP_N):
     if not creators_grouped_df.empty:
         # Show top N creators
         top_creators_df = creators_grouped_df.head(top_n)
+        
+        # Format numerical columns for better readability
+        top_creators_df['Spend'] = top_creators_df['Spend'].apply(format_currency)
+        top_creators_df['Revenue'] = top_creators_df['Revenue'].apply(format_currency)
+        top_creators_df['ROAS'] = top_creators_df['ROAS'].apply(format_roas)
+        top_creators_df['CTR'] = top_creators_df['CTR'].apply(format_percentage)
+        top_creators_df['CPM'] = top_creators_df['CPM'].apply(format_currency)
+        top_creators_df['Thumbstop'] = top_creators_df['Thumbstop'].apply(format_percentage)
+        top_creators_df['AOV'] = top_creators_df['AOV'].apply(format_currency)
+        top_creators_df['Impressions'] = top_creators_df['Impressions'].apply(lambda x: f"{x:,.0f}")
+        top_creators_df['Link Clicks'] = top_creators_df['Link Clicks'].apply(lambda x: f"{x:,.0f}")
+        top_creators_df['Video Views'] = top_creators_df['Video Views'].apply(lambda x: f"{x:,.0f}")
+        top_creators_df['Transactions'] = top_creators_df['Transactions'].apply(lambda x: f"{x:,.0f}")
+        
         st.dataframe(top_creators_df, use_container_width=True, hide_index=True)
         
         # Show all creators in expander
         with st.expander(f"👥 Show all {len(creators_grouped_df)} creators"):
+            # Format numerical columns for better readability
+            creators_grouped_df['Spend'] = creators_grouped_df['Spend'].apply(format_currency)
+            creators_grouped_df['Revenue'] = creators_grouped_df['Revenue'].apply(format_currency)
+            creators_grouped_df['ROAS'] = creators_grouped_df['ROAS'].apply(format_roas)
+            creators_grouped_df['CTR'] = creators_grouped_df['CTR'].apply(format_percentage)
+            creators_grouped_df['CPM'] = creators_grouped_df['CPM'].apply(format_currency)
+            creators_grouped_df['Thumbstop'] = creators_grouped_df['Thumbstop'].apply(format_percentage)
+            creators_grouped_df['AOV'] = creators_grouped_df['AOV'].apply(format_currency)
+            creators_grouped_df['Impressions'] = creators_grouped_df['Impressions'].apply(lambda x: f"{x:,.0f}")
+            creators_grouped_df['Link Clicks'] = creators_grouped_df['Link Clicks'].apply(lambda x: f"{x:,.0f}")
+            creators_grouped_df['Video Views'] = creators_grouped_df['Video Views'].apply(lambda x: f"{x:,.0f}")
+            creators_grouped_df['Transactions'] = creators_grouped_df['Transactions'].apply(lambda x: f"{x:,.0f}")
+            
             st.dataframe(creators_grouped_df, use_container_width=True, hide_index=True)
     
     st.markdown("---")
@@ -3028,11 +3108,11 @@ def display_summary_tab(ad_objects, top_n=DEFAULT_TOP_N):
         
         # Format the display values
         display_agencies_df['Spend_Display'] = display_agencies_df['Spend'].apply(format_currency)
-        display_agencies_df['ROAS_Display'] = display_agencies_df['ROAS'].apply(lambda x: f"{x:.6f}")
-        display_agencies_df['CTR_Display'] = display_agencies_df['CTR'].apply(lambda x: f"{x:.2f}%")
-        display_agencies_df['CPM_Display'] = display_agencies_df['CPM'].apply(lambda x: f"${x:.2f}")
-        display_agencies_df['Thumbstop_Display'] = display_agencies_df['Thumbstop'].apply(lambda x: f"{x:.2f}%")
-        display_agencies_df['AOV_Display'] = display_agencies_df['AOV'].apply(lambda x: f"${x:.2f}")
+        display_agencies_df['ROAS_Display'] = display_agencies_df['ROAS'].apply(format_roas)
+        display_agencies_df['CTR_Display'] = display_agencies_df['CTR'].apply(format_percentage)
+        display_agencies_df['CPM_Display'] = display_agencies_df['CPM'].apply(format_currency)
+        display_agencies_df['Thumbstop_Display'] = display_agencies_df['Thumbstop'].apply(format_percentage)
+        display_agencies_df['AOV_Display'] = display_agencies_df['AOV'].apply(format_currency)
         
         # Reset index to get agency names as a column
         display_agencies_df = display_agencies_df.reset_index()
@@ -3168,6 +3248,19 @@ def display_all_ads_tab(ad_objects):
         
         # Remove Thumbnail column from display
         display_df = display_df[[col for col in display_df.columns if col != 'Thumbnail']]
+        
+        # Format numerical columns for better readability
+        display_df['Spend'] = display_df['Spend'].apply(format_currency)
+        display_df['Revenue'] = display_df['Revenue'].apply(format_currency)
+        display_df['ROAS'] = display_df['ROAS'].apply(format_roas)
+        display_df['CTR'] = display_df['CTR'].apply(format_percentage)
+        display_df['CPM'] = display_df['CPM'].apply(format_currency)
+        display_df['Thumbstop'] = display_df['Thumbstop'].apply(format_percentage)
+        display_df['AOV'] = display_df['AOV'].apply(format_currency)
+        display_df['Impressions'] = display_df['Impressions'].apply(lambda x: f"{x:,.0f}")
+        display_df['Link Clicks'] = display_df['Link Clicks'].apply(lambda x: f"{x:,.0f}")
+        display_df['Video Views'] = display_df['Video Views'].apply(lambda x: f"{x:,.0f}")
+        display_df['Transactions'] = display_df['Transactions'].apply(lambda x: f"{x:,.0f}")
         
         st.dataframe(
             display_df,
@@ -3316,15 +3409,15 @@ def display_creator_analysis_tab(ad_objects):
     if 'Revenue' in display_df_formatted.columns:
         display_df_formatted['Revenue'] = display_df_formatted['Revenue'].apply(format_currency)
     if 'ROAS' in display_df_formatted.columns:
-        display_df_formatted['ROAS'] = display_df_formatted['ROAS'].apply(lambda x: f"{x:.2f}")
+        display_df_formatted['ROAS'] = display_df_formatted['ROAS'].apply(format_roas)
     if 'CTR' in display_df_formatted.columns:
-        display_df_formatted['CTR'] = display_df_formatted['CTR'].apply(lambda x: f"{x:.2f}%")
+        display_df_formatted['CTR'] = display_df_formatted['CTR'].apply(format_percentage)
     if 'CPM' in display_df_formatted.columns:
-        display_df_formatted['CPM'] = display_df_formatted['CPM'].apply(lambda x: f"${x:.2f}")
+        display_df_formatted['CPM'] = display_df_formatted['CPM'].apply(format_currency)
     if 'Thumbstop' in display_df_formatted.columns:
-        display_df_formatted['Thumbstop'] = display_df_formatted['Thumbstop'].apply(lambda x: f"{x:.2f}%")
+        display_df_formatted['Thumbstop'] = display_df_formatted['Thumbstop'].apply(format_percentage)
     if 'AOV' in display_df_formatted.columns:
-        display_df_formatted['AOV'] = display_df_formatted['AOV'].apply(lambda x: f"${x:.2f}")
+        display_df_formatted['AOV'] = display_df_formatted['AOV'].apply(format_currency)
     if 'Transactions' in display_df_formatted.columns:
         display_df_formatted['Transactions'] = display_df_formatted['Transactions'].apply(lambda x: f"{x:,.0f}")
     if 'Impressions' in display_df_formatted.columns:
@@ -3399,15 +3492,15 @@ def display_product_analysis_tab(ad_objects):
     if 'Revenue' in display_df_formatted.columns:
         display_df_formatted['Revenue'] = display_df_formatted['Revenue'].apply(format_currency)
     if 'ROAS' in display_df_formatted.columns:
-        display_df_formatted['ROAS'] = display_df_formatted['ROAS'].apply(lambda x: f"{x:.2f}")
+        display_df_formatted['ROAS'] = display_df_formatted['ROAS'].apply(format_roas)
     if 'CTR' in display_df_formatted.columns:
-        display_df_formatted['CTR'] = display_df_formatted['CTR'].apply(lambda x: f"{x:.2f}%")
+        display_df_formatted['CTR'] = display_df_formatted['CTR'].apply(format_percentage)
     if 'CPM' in display_df_formatted.columns:
-        display_df_formatted['CPM'] = display_df_formatted['CPM'].apply(lambda x: f"${x:.2f}")
+        display_df_formatted['CPM'] = display_df_formatted['CPM'].apply(format_currency)
     if 'Thumbstop' in display_df_formatted.columns:
-        display_df_formatted['Thumbstop'] = display_df_formatted['Thumbstop'].apply(lambda x: f"{x:.2f}%")
+        display_df_formatted['Thumbstop'] = display_df_formatted['Thumbstop'].apply(format_percentage)
     if 'AOV' in display_df_formatted.columns:
-        display_df_formatted['AOV'] = display_df_formatted['AOV'].apply(lambda x: f"${x:.2f}")
+        display_df_formatted['AOV'] = display_df_formatted['AOV'].apply(format_currency)
     if 'Transactions' in display_df_formatted.columns:
         display_df_formatted['Transactions'] = display_df_formatted['Transactions'].apply(lambda x: f"{x:,.0f}")
     if 'Impressions' in display_df_formatted.columns:
@@ -3634,11 +3727,11 @@ def display_campaign_explorer_tab(ad_objects, top_n=DEFAULT_TOP_N, core_products
                         display_ads_df_formatted = display_ads_df.copy()
                         display_ads_df_formatted['Spend'] = display_ads_df_formatted['Spend'].apply(format_currency)
                         display_ads_df_formatted['Revenue'] = display_ads_df_formatted['Revenue'].apply(format_currency)
-                        display_ads_df_formatted['ROAS'] = display_ads_df_formatted['ROAS'].apply(lambda x: f"{x:.2f}")
-                        display_ads_df_formatted['CTR'] = display_ads_df_formatted['CTR'].apply(lambda x: f"{x:.2f}%")
-                        display_ads_df_formatted['CPM'] = display_ads_df_formatted['CPM'].apply(lambda x: f"${x:.2f}")
-                        display_ads_df_formatted['Thumbstop'] = display_ads_df_formatted['Thumbstop'].apply(lambda x: f"{x:.2f}%")
-                        display_ads_df_formatted['AOV'] = display_ads_df_formatted['AOV'].apply(lambda x: f"${x:.2f}")
+                        display_ads_df_formatted['ROAS'] = display_ads_df_formatted['ROAS'].apply(format_roas)
+                        display_ads_df_formatted['CTR'] = display_ads_df_formatted['CTR'].apply(format_percentage)
+                        display_ads_df_formatted['CPM'] = display_ads_df_formatted['CPM'].apply(format_currency)
+                        display_ads_df_formatted['Thumbstop'] = display_ads_df_formatted['Thumbstop'].apply(format_percentage)
+                        display_ads_df_formatted['AOV'] = display_ads_df_formatted['AOV'].apply(format_currency)
                         display_ads_df_formatted['Transactions'] = display_ads_df_formatted['Transactions'].apply(lambda x: f"{x:,.0f}")
                         display_ads_df_formatted['Impressions'] = display_ads_df_formatted['Impressions'].apply(lambda x: f"{x:,.0f}")
                         display_ads_df_formatted['Link Clicks'] = display_ads_df_formatted['Link Clicks'].apply(lambda x: f"{x:,.0f}")
@@ -3729,11 +3822,11 @@ def display_campaign_explorer_tab(ad_objects, top_n=DEFAULT_TOP_N, core_products
                         # Format the dataframe for display
                         display_creators_df_formatted = display_creators_df.copy()
                         display_creators_df_formatted['Spend'] = display_creators_df_formatted['Spend'].apply(format_currency)
-                        display_creators_df_formatted['ROAS'] = display_creators_df_formatted['ROAS'].apply(lambda x: f"{x:.2f}")
-                        display_creators_df_formatted['CTR'] = display_creators_df_formatted['CTR'].apply(lambda x: f"{x:.2f}%")
-                        display_creators_df_formatted['CPM'] = display_creators_df_formatted['CPM'].apply(lambda x: f"${x:.2f}")
-                        display_creators_df_formatted['Thumbstop'] = display_creators_df_formatted['Thumbstop'].apply(lambda x: f"{x:.2f}%")
-                        display_creators_df_formatted['AOV'] = display_creators_df_formatted['AOV'].apply(lambda x: f"${x:.2f}")
+                        display_creators_df_formatted['ROAS'] = display_creators_df_formatted['ROAS'].apply(format_roas)
+                        display_creators_df_formatted['CTR'] = display_creators_df_formatted['CTR'].apply(format_percentage)
+                        display_creators_df_formatted['CPM'] = display_creators_df_formatted['CPM'].apply(format_currency)
+                        display_creators_df_formatted['Thumbstop'] = display_creators_df_formatted['Thumbstop'].apply(format_percentage)
+                        display_creators_df_formatted['AOV'] = display_creators_df_formatted['AOV'].apply(format_currency)
                         
                         # Use raw numbers for proper sorting, let Streamlit handle display
                         st.dataframe(display_creators_df, use_container_width=True, hide_index=True)
@@ -3743,11 +3836,11 @@ def display_campaign_explorer_tab(ad_objects, top_n=DEFAULT_TOP_N, core_products
                             # Format all creators dataframe
                             all_creators_formatted = creators_grouped_df.copy()
                             all_creators_formatted['Spend'] = all_creators_formatted['Spend'].apply(format_currency)
-                            all_creators_formatted['ROAS'] = all_creators_formatted['ROAS'].apply(lambda x: f"{x:.2f}")
-                            all_creators_formatted['CTR'] = all_creators_formatted['CTR'].apply(lambda x: f"{x:.2f}%")
-                            all_creators_formatted['CPM'] = all_creators_formatted['CPM'].apply(lambda x: f"${x:.2f}")
-                            all_creators_formatted['Thumbstop'] = all_creators_formatted['Thumbstop'].apply(lambda x: f"{x:.2f}%")
-                            all_creators_formatted['AOV'] = all_creators_formatted['AOV'].apply(lambda x: f"${x:.2f}")
+                            all_creators_formatted['ROAS'] = all_creators_formatted['ROAS'].apply(format_roas)
+                            all_creators_formatted['CTR'] = all_creators_formatted['CTR'].apply(format_percentage)
+                            all_creators_formatted['CPM'] = all_creators_formatted['CPM'].apply(format_currency)
+                            all_creators_formatted['Thumbstop'] = all_creators_formatted['Thumbstop'].apply(format_percentage)
+                            all_creators_formatted['AOV'] = all_creators_formatted['AOV'].apply(format_currency)
                             
                             # Use raw numbers for proper sorting, let Streamlit handle display
                             st.dataframe(creators_grouped_df, use_container_width=True, hide_index=True)
@@ -3924,15 +4017,15 @@ def display_product_creator_explorer_tab(ad_objects):
         if 'Revenue' in display_df_formatted.columns:
             display_df_formatted['Revenue'] = display_df_formatted['Revenue'].apply(format_currency)
         if 'ROAS' in display_df_formatted.columns:
-            display_df_formatted['ROAS'] = display_df_formatted['ROAS'].apply(lambda x: f"{x:.2f}")
+            display_df_formatted['ROAS'] = display_df_formatted['ROAS'].apply(format_roas)
         if 'CTR' in display_df_formatted.columns:
-            display_df_formatted['CTR'] = display_df_formatted['CTR'].apply(lambda x: f"{x:.2f}%")
+            display_df_formatted['CTR'] = display_df_formatted['CTR'].apply(format_percentage)
         if 'CPM' in display_df_formatted.columns:
-            display_df_formatted['CPM'] = display_df_formatted['CPM'].apply(lambda x: f"${x:.2f}")
+            display_df_formatted['CPM'] = display_df_formatted['CPM'].apply(format_currency)
         if 'Thumbstop' in display_df_formatted.columns:
-            display_df_formatted['Thumbstop'] = display_df_formatted['Thumbstop'].apply(lambda x: f"{x:.2f}%")
+            display_df_formatted['Thumbstop'] = display_df_formatted['Thumbstop'].apply(format_percentage)
         if 'AOV' in display_df_formatted.columns:
-            display_df_formatted['AOV'] = display_df_formatted['AOV'].apply(lambda x: f"${x:.2f}")
+            display_df_formatted['AOV'] = display_df_formatted['AOV'].apply(format_currency)
         if 'Transactions' in display_df_formatted.columns:
             display_df_formatted['Transactions'] = display_df_formatted['Transactions'].apply(lambda x: f"{x:,.0f}")
         if 'Impressions' in display_df_formatted.columns:
@@ -4130,7 +4223,7 @@ def main():
             set_use_cached_files(use_cached_files)
             
             # Update progress - Step 1: Checking existing data
-            progress_placeholder.info("🔍 Step 1/4: Checking for existing data files...")
+            progress_placeholder.info("🔍 Step 1/4: Fetching Meta & Northbeam data. This may take a few minutes.")
             
             # Fetch data using the updated configuration
             meta_insights, northbeam_df = fetch_all_data_sequentially(date_from, date_to)
@@ -4178,8 +4271,6 @@ def main():
                     os.makedirs("campaign-reporting/processed/comprehensive_ads", exist_ok=True)
                     with open(comprehensive_filename, 'w') as f:
                         json.dump(comprehensive_ads, f, indent=2)
-                else:
-                    print(f"💾 Comprehensive ads saved to S3 only (local saving disabled)")
                 
                 # Store data in session state for persistence across reruns
                 st.session_state.comprehensive_ads = comprehensive_ads
