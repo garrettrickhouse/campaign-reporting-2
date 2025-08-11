@@ -3000,18 +3000,29 @@ def display_summary_tab(ad_objects, top_n=DEFAULT_TOP_N):
         top_products_df_display = top_products_df.reset_index()
         top_products_df_display.columns = ['Product'] + list(top_products_df_display.columns[1:])
         
-        # Format numerical columns for better readability
-        top_products_df_display['Spend'] = top_products_df_display['Spend'].apply(format_currency)
-        top_products_df_display['Revenue'] = top_products_df_display['Revenue'].apply(format_currency)
-        top_products_df_display['ROAS'] = top_products_df_display['ROAS'].apply(format_roas)
-        top_products_df_display['CTR'] = top_products_df_display['CTR'].apply(format_percentage)
-        top_products_df_display['CPM'] = top_products_df_display['CPM'].apply(format_currency)
-        top_products_df_display['Thumbstop'] = top_products_df_display['Thumbstop'].apply(format_percentage)
-        top_products_df_display['AOV'] = top_products_df_display['AOV'].apply(format_currency)
-        top_products_df_display['Impressions'] = top_products_df_display['Impressions'].apply(lambda x: f"{x:,.0f}")
-        top_products_df_display['Link Clicks'] = top_products_df_display['Link Clicks'].apply(lambda x: f"{x:,.0f}")
-        top_products_df_display['Video Views'] = top_products_df_display['Video Views'].apply(lambda x: f"{x:,.0f}")
-        top_products_df_display['Transactions'] = top_products_df_display['Transactions'].apply(lambda x: f"{x:,.0f}")
+        # Format numerical columns for better readability (only if they exist)
+        if 'Spend' in top_products_df_display.columns:
+            top_products_df_display['Spend'] = top_products_df_display['Spend'].apply(format_currency)
+        if 'Revenue' in top_products_df_display.columns:
+            top_products_df_display['Revenue'] = top_products_df_display['Revenue'].apply(format_currency)
+        if 'ROAS' in top_products_df_display.columns:
+            top_products_df_display['ROAS'] = top_products_df_display['ROAS'].apply(format_roas)
+        if 'CTR' in top_products_df_display.columns:
+            top_products_df_display['CTR'] = top_products_df_display['CTR'].apply(format_percentage)
+        if 'CPM' in top_products_df_display.columns:
+            top_products_df_display['CPM'] = top_products_df_display['CPM'].apply(format_currency)
+        if 'Thumbstop' in top_products_df_display.columns:
+            top_products_df_display['Thumbstop'] = top_products_df_display['Thumbstop'].apply(format_percentage)
+        if 'AOV' in top_products_df_display.columns:
+            top_products_df_display['AOV'] = top_products_df_display['AOV'].apply(format_currency)
+        if 'Impressions' in top_products_df_display.columns:
+            top_products_df_display['Impressions'] = top_products_df_display['Impressions'].apply(lambda x: f"{x:,.0f}")
+        if 'Link Clicks' in top_products_df_display.columns:
+            top_products_df_display['Link Clicks'] = top_products_df_display['Link Clicks'].apply(lambda x: f"{x:,.0f}")
+        if 'Video Views' in top_products_df_display.columns:
+            top_products_df_display['Video Views'] = top_products_df_display['Video Views'].apply(lambda x: f"{x:,.0f}")
+        if 'Transactions' in top_products_df_display.columns:
+            top_products_df_display['Transactions'] = top_products_df_display['Transactions'].apply(lambda x: f"{x:,.0f}")
         
         st.dataframe(top_products_df_display, use_container_width=True, hide_index=True)
         
@@ -3020,18 +3031,29 @@ def display_summary_tab(ad_objects, top_n=DEFAULT_TOP_N):
             all_products_df_display = products_df.reset_index()
             all_products_df_display.columns = ['Product'] + list(all_products_df_display.columns[1:])
             
-            # Format numerical columns for better readability
-            all_products_df_display['Spend'] = all_products_df_display['Spend'].apply(format_currency)
-            all_products_df_display['Revenue'] = all_products_df_display['Revenue'].apply(format_currency)
-            all_products_df_display['ROAS'] = all_products_df_display['ROAS'].apply(format_roas)
-            all_products_df_display['CTR'] = all_products_df_display['CTR'].apply(format_percentage)
-            all_products_df_display['CPM'] = all_products_df_display['CPM'].apply(format_currency)
-            all_products_df_display['Thumbstop'] = all_products_df_display['Thumbstop'].apply(format_percentage)
-            all_products_df_display['AOV'] = all_products_df_display['AOV'].apply(format_currency)
-            all_products_df_display['Impressions'] = all_products_df_display['Impressions'].apply(lambda x: f"{x:,.0f}")
-            all_products_df_display['Link Clicks'] = all_products_df_display['Link Clicks'].apply(lambda x: f"{x:,.0f}")
-            all_products_df_display['Video Views'] = all_products_df_display['Video Views'].apply(lambda x: f"{x:,.0f}")
-            all_products_df_display['Transactions'] = all_products_df_display['Transactions'].apply(lambda x: f"{x:,.0f}")
+            # Format numerical columns for better readability (only if they exist)
+            if 'Spend' in all_products_df_display.columns:
+                all_products_df_display['Spend'] = all_products_df_display['Spend'].apply(format_currency)
+            if 'Revenue' in all_products_df_display.columns:
+                all_products_df_display['Revenue'] = all_products_df_display['Revenue'].apply(format_currency)
+            if 'ROAS' in all_products_df_display.columns:
+                all_products_df_display['ROAS'] = all_products_df_display['ROAS'].apply(format_roas)
+            if 'CTR' in all_products_df_display.columns:
+                all_products_df_display['CTR'] = all_products_df_display['CTR'].apply(format_percentage)
+            if 'CPM' in all_products_df_display.columns:
+                all_products_df_display['CPM'] = all_products_df_display['CPM'].apply(format_currency)
+            if 'Thumbstop' in all_products_df_display.columns:
+                all_products_df_display['Thumbstop'] = all_products_df_display['Thumbstop'].apply(format_percentage)
+            if 'AOV' in all_products_df_display.columns:
+                all_products_df_display['AOV'] = all_products_df_display['AOV'].apply(format_currency)
+            if 'Impressions' in all_products_df_display.columns:
+                all_products_df_display['Impressions'] = all_products_df_display['Impressions'].apply(lambda x: f"{x:,.0f}")
+            if 'Link Clicks' in all_products_df_display.columns:
+                all_products_df_display['Link Clicks'] = all_products_df_display['Link Clicks'].apply(lambda x: f"{x:,.0f}")
+            if 'Video Views' in all_products_df_display.columns:
+                all_products_df_display['Video Views'] = all_products_df_display['Video Views'].apply(lambda x: f"{x:,.0f}")
+            if 'Transactions' in all_products_df_display.columns:
+                all_products_df_display['Transactions'] = all_products_df_display['Transactions'].apply(lambda x: f"{x:,.0f}")
             
             st.dataframe(all_products_df_display, use_container_width=True, hide_index=True)
     
@@ -3064,35 +3086,57 @@ def display_summary_tab(ad_objects, top_n=DEFAULT_TOP_N):
         # Show top N creators
         top_creators_df = creators_grouped_df.head(top_n)
         
-        # Format numerical columns for better readability
-        top_creators_df['Spend'] = top_creators_df['Spend'].apply(format_currency)
-        top_creators_df['Revenue'] = top_creators_df['Revenue'].apply(format_currency)
-        top_creators_df['ROAS'] = top_creators_df['ROAS'].apply(format_roas)
-        top_creators_df['CTR'] = top_creators_df['CTR'].apply(format_percentage)
-        top_creators_df['CPM'] = top_creators_df['CPM'].apply(format_currency)
-        top_creators_df['Thumbstop'] = top_creators_df['Thumbstop'].apply(format_percentage)
-        top_creators_df['AOV'] = top_creators_df['AOV'].apply(format_currency)
-        top_creators_df['Impressions'] = top_creators_df['Impressions'].apply(lambda x: f"{x:,.0f}")
-        top_creators_df['Link Clicks'] = top_creators_df['Link Clicks'].apply(lambda x: f"{x:,.0f}")
-        top_creators_df['Video Views'] = top_creators_df['Video Views'].apply(lambda x: f"{x:,.0f}")
-        top_creators_df['Transactions'] = top_creators_df['Transactions'].apply(lambda x: f"{x:,.0f}")
+        # Format numerical columns for better readability (only if they exist)
+        if 'Spend' in top_creators_df.columns:
+            top_creators_df['Spend'] = top_creators_df['Spend'].apply(format_currency)
+        if 'Revenue' in top_creators_df.columns:
+            top_creators_df['Revenue'] = top_creators_df['Revenue'].apply(format_currency)
+        if 'ROAS' in top_creators_df.columns:
+            top_creators_df['ROAS'] = top_creators_df['ROAS'].apply(format_roas)
+        if 'CTR' in top_creators_df.columns:
+            top_creators_df['CTR'] = top_creators_df['CTR'].apply(format_percentage)
+        if 'CPM' in top_creators_df.columns:
+            top_creators_df['CPM'] = top_creators_df['CPM'].apply(format_currency)
+        if 'Thumbstop' in top_creators_df.columns:
+            top_creators_df['Thumbstop'] = top_creators_df['Thumbstop'].apply(format_percentage)
+        if 'AOV' in top_creators_df.columns:
+            top_creators_df['AOV'] = top_creators_df['AOV'].apply(format_currency)
+        if 'Impressions' in top_creators_df.columns:
+            top_creators_df['Impressions'] = top_creators_df['Impressions'].apply(lambda x: f"{x:,.0f}")
+        if 'Link Clicks' in top_creators_df.columns:
+            top_creators_df['Link Clicks'] = top_creators_df['Link Clicks'].apply(lambda x: f"{x:,.0f}")
+        if 'Video Views' in top_creators_df.columns:
+            top_creators_df['Video Views'] = top_creators_df['Video Views'].apply(lambda x: f"{x:,.0f}")
+        if 'Transactions' in top_creators_df.columns:
+            top_creators_df['Transactions'] = top_creators_df['Transactions'].apply(lambda x: f"{x:,.0f}")
         
         st.dataframe(top_creators_df, use_container_width=True, hide_index=True)
         
         # Show all creators in expander
         with st.expander(f"👥 Show all {len(creators_grouped_df)} creators"):
-            # Format numerical columns for better readability
-            creators_grouped_df['Spend'] = creators_grouped_df['Spend'].apply(format_currency)
-            creators_grouped_df['Revenue'] = creators_grouped_df['Revenue'].apply(format_currency)
-            creators_grouped_df['ROAS'] = creators_grouped_df['ROAS'].apply(format_roas)
-            creators_grouped_df['CTR'] = creators_grouped_df['CTR'].apply(format_percentage)
-            creators_grouped_df['CPM'] = creators_grouped_df['CPM'].apply(format_currency)
-            creators_grouped_df['Thumbstop'] = creators_grouped_df['Thumbstop'].apply(format_percentage)
-            creators_grouped_df['AOV'] = creators_grouped_df['AOV'].apply(format_currency)
-            creators_grouped_df['Impressions'] = creators_grouped_df['Impressions'].apply(lambda x: f"{x:,.0f}")
-            creators_grouped_df['Link Clicks'] = creators_grouped_df['Link Clicks'].apply(lambda x: f"{x:,.0f}")
-            creators_grouped_df['Video Views'] = creators_grouped_df['Video Views'].apply(lambda x: f"{x:,.0f}")
-            creators_grouped_df['Transactions'] = creators_grouped_df['Transactions'].apply(lambda x: f"{x:,.0f}")
+            # Format numerical columns for better readability (only if they exist)
+            if 'Spend' in creators_grouped_df.columns:
+                creators_grouped_df['Spend'] = creators_grouped_df['Spend'].apply(format_currency)
+            if 'Revenue' in creators_grouped_df.columns:
+                creators_grouped_df['Revenue'] = creators_grouped_df['Revenue'].apply(format_currency)
+            if 'ROAS' in creators_grouped_df.columns:
+                creators_grouped_df['ROAS'] = creators_grouped_df['ROAS'].apply(format_roas)
+            if 'CTR' in creators_grouped_df.columns:
+                creators_grouped_df['CTR'] = creators_grouped_df['CTR'].apply(format_percentage)
+            if 'CPM' in creators_grouped_df.columns:
+                creators_grouped_df['CPM'] = creators_grouped_df['CPM'].apply(format_currency)
+            if 'Thumbstop' in creators_grouped_df.columns:
+                creators_grouped_df['Thumbstop'] = creators_grouped_df['Thumbstop'].apply(format_percentage)
+            if 'AOV' in creators_grouped_df.columns:
+                creators_grouped_df['AOV'] = creators_grouped_df['AOV'].apply(format_currency)
+            if 'Impressions' in creators_grouped_df.columns:
+                creators_grouped_df['Impressions'] = creators_grouped_df['Impressions'].apply(lambda x: f"{x:,.0f}")
+            if 'Link Clicks' in creators_grouped_df.columns:
+                creators_grouped_df['Link Clicks'] = creators_grouped_df['Link Clicks'].apply(lambda x: f"{x:,.0f}")
+            if 'Video Views' in creators_grouped_df.columns:
+                creators_grouped_df['Video Views'] = creators_grouped_df['Video Views'].apply(lambda x: f"{x:,.0f}")
+            if 'Transactions' in creators_grouped_df.columns:
+                creators_grouped_df['Transactions'] = creators_grouped_df['Transactions'].apply(lambda x: f"{x:,.0f}")
             
             st.dataframe(creators_grouped_df, use_container_width=True, hide_index=True)
     
