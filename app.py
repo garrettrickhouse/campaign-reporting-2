@@ -3794,7 +3794,7 @@ def display_campaign_explorer_tab(ad_objects, top_n=DEFAULT_TOP_N, core_products
                         
                         # Use LinkColumn for clickable URLs
                         st.dataframe(
-                            display_ads_df,
+                            display_ads_df_formatted,
                             column_config={
                                 "Link": st.column_config.LinkColumn(
                                     "Link",
@@ -3819,8 +3819,33 @@ def display_campaign_explorer_tab(ad_objects, top_n=DEFAULT_TOP_N, core_products
                             # Remove Thumbnail column from display
                             display_all_ads_df = display_all_ads_df[[col for col in display_all_ads_df.columns if col != 'Thumbnail']]
                             
+                            # Format the dataframe for display
+                            display_all_ads_df_formatted = display_all_ads_df.copy()
+                            if 'Spend' in display_all_ads_df_formatted.columns:
+                                display_all_ads_df_formatted['Spend'] = display_all_ads_df_formatted['Spend'].apply(format_currency)
+                            if 'Revenue' in display_all_ads_df_formatted.columns:
+                                display_all_ads_df_formatted['Revenue'] = display_all_ads_df_formatted['Revenue'].apply(format_currency)
+                            if 'ROAS' in display_all_ads_df_formatted.columns:
+                                display_all_ads_df_formatted['ROAS'] = display_all_ads_df_formatted['ROAS'].apply(format_roas)
+                            if 'CTR' in display_all_ads_df_formatted.columns:
+                                display_all_ads_df_formatted['CTR'] = display_all_ads_df_formatted['CTR'].apply(format_percentage)
+                            if 'CPM' in display_all_ads_df_formatted.columns:
+                                display_all_ads_df_formatted['CPM'] = display_all_ads_df_formatted['CPM'].apply(format_currency)
+                            if 'Thumbstop' in display_all_ads_df_formatted.columns:
+                                display_all_ads_df_formatted['Thumbstop'] = display_all_ads_df_formatted['Thumbstop'].apply(format_percentage)
+                            if 'AOV' in display_all_ads_df_formatted.columns:
+                                display_all_ads_df_formatted['AOV'] = display_all_ads_df_formatted['AOV'].apply(format_currency)
+                            if 'Transactions' in display_all_ads_df_formatted.columns:
+                                display_all_ads_df_formatted['Transactions'] = display_all_ads_df_formatted['Transactions'].apply(lambda x: f"{x:,.0f}")
+                            if 'Impressions' in display_all_ads_df_formatted.columns:
+                                display_all_ads_df_formatted['Impressions'] = display_all_ads_df_formatted['Impressions'].apply(lambda x: f"{x:,.0f}")
+                            if 'Link Clicks' in display_all_ads_df_formatted.columns:
+                                display_all_ads_df_formatted['Link Clicks'] = display_all_ads_df_formatted['Link Clicks'].apply(lambda x: f"{x:,.0f}")
+                            if 'Video Views' in display_all_ads_df_formatted.columns:
+                                display_all_ads_df_formatted['Video Views'] = display_all_ads_df_formatted['Video Views'].apply(lambda x: f"{x:,.0f}")
+                            
                             st.dataframe(
-                                display_all_ads_df,
+                                display_all_ads_df_formatted,
                                 column_config={
                                     "Link": st.column_config.LinkColumn(
                                         "Link",
@@ -3866,28 +3891,38 @@ def display_campaign_explorer_tab(ad_objects, top_n=DEFAULT_TOP_N, core_products
                         # Format the dataframe for display
                         display_creators_df_formatted = display_creators_df.copy()
                         display_creators_df_formatted['Spend'] = display_creators_df_formatted['Spend'].apply(format_currency)
+                        display_creators_df_formatted['Revenue'] = display_creators_df_formatted['Revenue'].apply(format_currency)
                         display_creators_df_formatted['ROAS'] = display_creators_df_formatted['ROAS'].apply(format_roas)
                         display_creators_df_formatted['CTR'] = display_creators_df_formatted['CTR'].apply(format_percentage)
                         display_creators_df_formatted['CPM'] = display_creators_df_formatted['CPM'].apply(format_currency)
                         display_creators_df_formatted['Thumbstop'] = display_creators_df_formatted['Thumbstop'].apply(format_percentage)
                         display_creators_df_formatted['AOV'] = display_creators_df_formatted['AOV'].apply(format_currency)
+                        display_creators_df_formatted['Transactions'] = display_creators_df_formatted['Transactions'].apply(lambda x: f"{x:,.0f}")
+                        display_creators_df_formatted['Impressions'] = display_creators_df_formatted['Impressions'].apply(lambda x: f"{x:,.0f}")
+                        display_creators_df_formatted['Link Clicks'] = display_creators_df_formatted['Link Clicks'].apply(lambda x: f"{x:,.0f}")
+                        display_creators_df_formatted['Video Views'] = display_creators_df_formatted['Video Views'].apply(lambda x: f"{x:,.0f}")
                         
-                        # Use raw numbers for proper sorting, let Streamlit handle display
-                        st.dataframe(display_creators_df, use_container_width=True, hide_index=True)
+                        # Display the formatted dataframe
+                        st.dataframe(display_creators_df_formatted, use_container_width=True, hide_index=True)
                         
                         # Show all creators in expander
                         with st.expander(f"👥 Show all {len(creators_grouped_df)} creators"):
                             # Format all creators dataframe
                             all_creators_formatted = creators_grouped_df.copy()
                             all_creators_formatted['Spend'] = all_creators_formatted['Spend'].apply(format_currency)
+                            all_creators_formatted['Revenue'] = all_creators_formatted['Revenue'].apply(format_currency)
                             all_creators_formatted['ROAS'] = all_creators_formatted['ROAS'].apply(format_roas)
                             all_creators_formatted['CTR'] = all_creators_formatted['CTR'].apply(format_percentage)
                             all_creators_formatted['CPM'] = all_creators_formatted['CPM'].apply(format_currency)
                             all_creators_formatted['Thumbstop'] = all_creators_formatted['Thumbstop'].apply(format_percentage)
                             all_creators_formatted['AOV'] = all_creators_formatted['AOV'].apply(format_currency)
+                            all_creators_formatted['Transactions'] = all_creators_formatted['Transactions'].apply(lambda x: f"{x:,.0f}")
+                            all_creators_formatted['Impressions'] = all_creators_formatted['Impressions'].apply(lambda x: f"{x:,.0f}")
+                            all_creators_formatted['Link Clicks'] = all_creators_formatted['Link Clicks'].apply(lambda x: f"{x:,.0f}")
+                            all_creators_formatted['Video Views'] = all_creators_formatted['Video Views'].apply(lambda x: f"{x:,.0f}")
                             
-                            # Use raw numbers for proper sorting, let Streamlit handle display
-                            st.dataframe(creators_grouped_df, use_container_width=True, hide_index=True)
+                            # Display the formatted dataframe
+                            st.dataframe(all_creators_formatted, use_container_width=True, hide_index=True)
                     else:
                         st.info("No creator data available for the selected filters.")
 
