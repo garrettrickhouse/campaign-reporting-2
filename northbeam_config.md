@@ -54,7 +54,7 @@ NORTHBEAM_MAX_RETRIES=3           # 3 attempts - how many times to retry failed 
 **Symptoms**: HTTP 429 errors during polling
 **Solutions**:
 - Increase `NORTHBEAM_POLL_INTERVAL` to 15-20 seconds
-- The app automatically handles rate limits with exponential backoff
+- The app automatically handles rate limits with consistent delays
 
 ### 3. Export Creation Fails
 **Symptoms**: "Export creation failed" messages

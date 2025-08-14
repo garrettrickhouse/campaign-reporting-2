@@ -71,8 +71,8 @@ NORTHBEAM_BASE_URL = "https://api.northbeam.io/v1"
 NORTHBEAM_MAX_RETRIES = 3      # 3 retries default
 NORTHBEAM_RETRY_DELAY = 10         # Wait between retry attempts (10 seconds)  
 
-NORTHBEAM_POLL_INTERVAL = 5
-NORTHBEAM_BASE_DELAY = 15          # Base for exponential backoff (15s, 30s, 60s)
+NORTHBEAM_POLL_INTERVAL = 10
+NORTHBEAM_BASE_DELAY = 30          # Base delay for all retries
 
 META_REQUEST_TIMEOUT = 30            # Timeout for Meta API requests
 META_RATE_LIMIT_DELAY = 0.5         # Delay between Meta API requests
@@ -800,9 +800,7 @@ def create_northbeam_export(start_date, end_date):
         ]
     }
     
-    # Retry logic with exponential backoff
-    base_delay = NORTHBEAM_BASE_DELAY  # Start with 15 seconds (15s, 30s, 60s exponential backoff)
-    
+
     for attempt in range(NORTHBEAM_MAX_RETRIES):
         try:
             response = requests.post(url, headers=get_northbeam_headers(), json=payload, timeout=60)
@@ -812,7 +810,7 @@ def create_northbeam_export(start_date, end_date):
                 print(f"✅ Export created successfully! ID: {export_id}")
                 return export_id
             elif response.status_code == 429:
-                delay = NORTHBEAM_BASE_DELAY * (2 ** attempt)  # Exponential backoff
+                delay = NORTHBEAM_BASE_DELAY  # Consistent delay
                 print(f"❌ Rate limit exceeded (429) on attempt {attempt + 1}: {response.text}")
                 print(f"⏱️ Waiting {delay} seconds before retrying...")
                 time.sleep(delay)
@@ -822,7 +820,7 @@ def create_northbeam_export(start_date, end_date):
                 # Don't retry on 400 errors as they're likely configuration issues
                 return None
             elif response.status_code >= 500:
-                delay = NORTHBEAM_BASE_DELAY * (2 ** attempt)
+                delay = NORTHBEAM_BASE_DELAY  # Consistent delay
                 print(f"❌ Server error ({response.status_code}) on attempt {attempt + 1}: {response.text}")
                 print(f"⏱️ Waiting {delay} seconds before retrying...")
                 time.sleep(delay)
@@ -833,13 +831,13 @@ def create_northbeam_export(start_date, end_date):
                 return None
                 
         except requests.exceptions.Timeout:
-            delay = NORTHBEAM_BASE_DELAY * (2 ** attempt)
+            delay = NORTHBEAM_BASE_DELAY  # Consistent delay
             print(f"⏰ Request timeout on attempt {attempt + 1}")
             print(f"⏱️ Waiting {delay} seconds before retrying...")
             time.sleep(delay)
             continue
         except requests.exceptions.RequestException as e:
-            delay = NORTHBEAM_BASE_DELAY * (2 ** attempt)
+            delay = NORTHBEAM_BASE_DELAY  # Consistent delay
             print(f"❌ Request error on attempt {attempt + 1}: {e}")
             print(f"⏱️ Waiting {delay} seconds before retrying...")
             time.sleep(delay)
@@ -895,7 +893,7 @@ def poll_northbeam_export_status(export_id, timeout_seconds=20, poll_interval=5)
                     
             elif response.status_code == 429:
                 consecutive_errors += 1
-                wait_time = min(NORTHBEAM_BASE_DELAY * consecutive_errors, NORTHBEAM_BASE_DELAY * 12)  # Exponential backoff up to 3 minutes
+                wait_time = NORTHBEAM_BASE_DELAY  # Consistent delay
                 print(f"  ⚠️ Rate limit hit during polling (attempt {consecutive_errors}), waiting {wait_time} seconds...")
                 time.sleep(wait_time)
                 continue
@@ -1014,21 +1012,21 @@ def download_export_data(export_id, start_date, end_date, timeout_seconds=20, po
         return None
 
 def fetch_northbeam_data(date_from=None, date_to=None):
-    """Fetch Northbeam data for the specified date range with exponential backoff retry logic"""
+    """Fetch Northbeam data for the specified date range with consistent delay retry logic"""
     # Safety check for date_from and date_to - if not set, raise error
     if date_from is None or date_to is None:
         raise ValueError("date_from and date_to must be provided to fetch_northbeam_data")
     
     print(f"\n🔄 Fetching Northbeam data for {date_from} to {date_to}...")
     
-    # Exponential backoff configuration: (poll_interval, timeout)
+    # Consistent delay configuration: (poll_interval, timeout)
     backoff_config = [
-        (NORTHBEAM_POLL_INTERVAL, 15),                    # 1st attempt: every 5s for 15s
-        (NORTHBEAM_POLL_INTERVAL * 2, 30),               # 2nd attempt: every 10s for 30s  
-        (NORTHBEAM_POLL_INTERVAL * 3, 45)                # 3rd attempt: every 15s for 45s
+        (NORTHBEAM_POLL_INTERVAL, 15),                    # 1st attempt: every 10s for 15s
+        (NORTHBEAM_POLL_INTERVAL, 30),                    # 2nd attempt: every 10s for 30s  
+        (NORTHBEAM_POLL_INTERVAL, 45)                     # 3rd attempt: every 10s for 45s
     ]
     
-    # Try up to 3 times with exponential backoff
+    # Try up to 3 times with consistent delays
     for attempt in range(1, NORTHBEAM_MAX_RETRIES + 1):
         print(f"📊 Attempt {attempt}/{NORTHBEAM_MAX_RETRIES}")
         
@@ -1047,7 +1045,7 @@ def fetch_northbeam_data(date_from=None, date_to=None):
                 print("❌ All attempts failed - giving up")
                 return None
         
-        # Download data with exponential backoff timeout and interval
+        # Download data with consistent delay timeout and interval
         df = download_export_data(export_id, date_from, date_to, timeout, poll_interval)
         if df is not None:
             # Success! Filter and save data
