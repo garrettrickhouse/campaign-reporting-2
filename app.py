@@ -3886,8 +3886,9 @@ def main():
     if generate_button:
         # Generate report with status messages
         
-        # Show loading message in main area
-        st.info("⏱️ **Data fetching in progress...** This may take several minutes depending on the number of ads and data sources selected. Please be patient while we gather your campaign data.")
+        # Show loading message in main area only if no data is loaded yet
+        if not st.session_state.get('comprehensive_ads'):
+            st.info("⏱️ **Data fetching in progress...** This may take several minutes depending on the number of ads and data sources selected. Please be patient while we gather your campaign data.")
         
         try:
             # Temporarily update the global variables for this session
