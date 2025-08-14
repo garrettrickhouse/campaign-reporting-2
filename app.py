@@ -3744,7 +3744,7 @@ def main():
         st.session_state.date_to = date_to
     
     st.sidebar.subheader("📊 Settings")
-    top_n = st.sidebar.number_input("Top N (default # ads/entities to display)", min_value=1, max_value=50, value=DEFAULT_TOP_N, key="top_n")
+    top_n = st.sidebar.number_input("Top N (# ads/groups to display)", min_value=1, max_value=50, value=DEFAULT_TOP_N, key="top_n")
     merge_ads = st.sidebar.checkbox("Merge Ads with Same Name", value=DEFAULT_MERGE_ADS_WITH_SAME_NAME, key="merge_ads", help="Combine ads with identical names and campaign types, aggregate their metrics")
     # Data source selection - at least one must be selected
     st.sidebar.subheader("🔌 Data Sources")
