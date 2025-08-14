@@ -49,7 +49,7 @@ ROOT_DIRECTORY = "campaign-reporting"
 # DATE_FROM = "2025-06-30" # Default start date
 # DATE_TO = "2025-07-01" # Default end date
 # TOP_N = 5
-# CORE_PRODUCTS = [["LLEM", "Mascara"], ["BEB"], ["IWEL"], ["BrowGel"], ["LipTint"]]
+# CORE_PRODUCTS = [["LLEM", "Mascara"], ["BEB"], ["IWEL"], ["BrowGel"], ["LipTintHydrating"]]
 
 CAMPAIGN_TYPES = [["Prospecting", 0.35], ["Prospecting+Remarketing", 0.69], ["Remarketing", 2.20]]
 AGENCY_CODES = ["RHM", "NRTV"]
@@ -534,15 +534,14 @@ def extract_product_from_ad_name(ad_name):
             if end_index != -1:
                 extracted_product = ad_name[start_index:end_index]
                 
-                # Apply product merging logic from CORE_PRODUCTS if available
-                try:
-                    for product_group in CORE_PRODUCTS:
-                        if isinstance(product_group, list) and extracted_product in product_group:
-                            # Return the first product name as the label for merged products
-                            return product_group[0]
-                except NameError:
-                    # CORE_PRODUCTS not defined, return the original product
-                    pass
+                # Special rule for LipTint products
+                if extracted_product.lower() == 'liptint':
+                    if 'matte' in ad_name.lower():
+                        return 'LipTintMatte'
+                    else:
+                        return 'LipTintHydrating'
+                
+                
                 
                 # If not in any merged group, return the original product
                 return extracted_product
@@ -1912,7 +1911,7 @@ GENERATE_GOOGLE_DOC = True  # Set to True to generate Google Doc from web displa
 DEFAULT_DATE_FROM = date.today() - timedelta(days=7)  # 7 days before today
 DEFAULT_DATE_TO = date.today() - timedelta(days=1)    # yesterday
 DEFAULT_TOP_N = 5
-DEFAULT_CORE_PRODUCTS = [["LLEM", "Mascara"], ["BEB"], ["IWEL"], ["BrowGel"], ["LipTint"]]
+DEFAULT_CORE_PRODUCTS = [["LLEM", "Mascara"], ["BEB"], ["IWEL"], ["BrowGel"], ["LipTintHydrating"]]
 
 DEFAULT_MERGE_ADS_WITH_SAME_NAME = True
 DEFAULT_USE_NORTHBEAM_DATA = True
@@ -2444,7 +2443,7 @@ def display_summary_tab(ad_objects, top_n=DEFAULT_TOP_N):
     st.markdown("---")
     
     # Top N Ads table
-    st.subheader(f"🏆 Top {top_n} Ads")
+    st.subheader(f"🏆 Top {top_n} Spending Ads")
     
     # Note: Background processing runs independently - links will appear automatically when ready
     
@@ -2479,16 +2478,16 @@ def display_summary_tab(ad_objects, top_n=DEFAULT_TOP_N):
             'Creator': ad['metadata'].get('creator', 'Unknown'),
             'Agency': ad['metadata'].get('agency', 'Unknown'),
             'Spend': get_metric_value(ad, 'spend', data_source),
-            'Revenue': get_metric_value(ad, 'attributed_rev', data_source),
-            'Transactions': get_metric_value(ad, 'transactions', data_source),
-            'Impressions': get_metric_value(ad, 'impressions', data_source),
-            'Link Clicks': get_metric_value(ad, 'meta_link_clicks', data_source),
-            'Video Views': get_metric_value(ad, 'meta_3s_video_views', data_source),
             'ROAS': get_metric_value(ad, 'roas', data_source),
             'CTR': (get_metric_value(ad, 'meta_link_clicks', data_source) / get_metric_value(ad, 'impressions', data_source) * 100) if get_metric_value(ad, 'impressions', data_source) > 0 else 0,
             'CPM': (get_metric_value(ad, 'spend', data_source) / get_metric_value(ad, 'impressions', data_source) * 1000) if get_metric_value(ad, 'impressions', data_source) > 0 else 0,
             'Thumbstop': (get_metric_value(ad, 'meta_3s_video_views', data_source) / get_metric_value(ad, 'impressions', data_source) * 100) if get_metric_value(ad, 'impressions', data_source) > 0 else 0,
-            'AOV': get_metric_value(ad, 'attributed_rev', data_source) / get_metric_value(ad, 'transactions', data_source) if get_metric_value(ad, 'transactions', data_source) > 0 else 0
+            'AOV': get_metric_value(ad, 'attributed_rev', data_source) / get_metric_value(ad, 'transactions', data_source) if get_metric_value(ad, 'transactions', data_source) > 0 else 0,
+            'Revenue': get_metric_value(ad, 'attributed_rev', data_source),
+            'Transactions': get_metric_value(ad, 'transactions', data_source),
+            'Impressions': get_metric_value(ad, 'impressions', data_source),
+            'Link Clicks': get_metric_value(ad, 'meta_link_clicks', data_source),
+            'Video Views': get_metric_value(ad, 'meta_3s_video_views', data_source)
         })
 
     
@@ -3302,12 +3301,35 @@ def display_campaign_explorer_tab(ad_objects, top_n=DEFAULT_TOP_N, core_products
                     
                     st.markdown("---")
                     
+                    target_roas = get_target_roas(campaign)
+
                     # Top N Ads for selected campaign and product
-                    st.subheader(f"🏆 Top {top_n} Ads")
+                    
+
+                    # Filter ads that meet or exceed ROAS goal for this campaign
+                    if target_roas is not None:
+                        st.subheader(f"🏆 Top {top_n} Spending Ads (> {target_roas} ROAS)")
+                        roas_goal_ads = []
+                        for ad in product_ads:
+                            ad_roas = get_metric_value(ad, 'roas', data_source)
+                            if ad_roas >= target_roas:
+                                roas_goal_ads.append(ad)
+                        
+                        if not roas_goal_ads:
+                            st.info(f"No ads found for {product} in {campaign} campaign that meet the ROAS goal of {target_roas}")
+                            continue
+                                                
+                        # Use filtered ads for top N table
+                        filtered_ads = roas_goal_ads
+                    else:
+                        # No ROAS target defined, use all ads
+                        st.subheader(f"🏆 Top {top_n} Spending Ads")
+                        filtered_ads = product_ads
+                        st.info(f"No ROAS target defined for {campaign} campaign type")
                     
                     # Create ads dataframe for the filtered data
                     ads_data = []
-                    for ad in product_ads:
+                    for ad in filtered_ads:
                         # Get ad URL from processed data
                         ad_id = ad['ad_ids'].get('ad_id', '')
                         ad_type = ad['metadata'].get('ad_type', 'Unknown')
@@ -3339,7 +3361,7 @@ def display_campaign_explorer_tab(ad_objects, top_n=DEFAULT_TOP_N, core_products
                     # Sort by raw numeric values before formatting
                     ads_df = ads_df.sort_values('Spend', ascending=False)
                     
-                    # Show top N ads by default
+                    # Show top N ads from the filtered results
                     display_ads_df = ads_df.head(top_n).copy()
                     
                     if not display_ads_df.empty:
@@ -3384,10 +3406,55 @@ def display_campaign_explorer_tab(ad_objects, top_n=DEFAULT_TOP_N, core_products
                             hide_index=True
                         )
                         
-                        # Show all ads in expander
-                        with st.expander(f"📊 Show all {len(ads_df)} ads"):
-                            # Create display dataframe with thumbnail column
-                            display_all_ads_df = ads_df.copy()
+                        # Show all ads in expander (unfiltered - all ads for this campaign/product)
+                        with st.expander(f"📊 Show all {len(product_ads)} ads"):
+                            # Create ads dataframe for ALL ads (unfiltered)
+                            all_ads_data = []
+                            for ad in product_ads:
+                                # Get ad URL from processed data
+                                ad_id = ad['ad_ids'].get('ad_id', '')
+                                ad_type = ad['metadata'].get('ad_type', 'Unknown')
+                                primary_url, thumbnail_url = get_ad_url(ad_id, ad_type) if ad_id else ("", "")
+
+                                all_ads_data.append({
+                                    'Thumbnail': get_thumbnail_url_from_cache(ad_id),
+                                    'Link': primary_url,
+                                    'Ad Type': ad['metadata'].get('ad_type', 'Unknown'),
+                                    'Ad Name': ad['ad_ids']['ad_name'],
+                                    'Merged': ad.get('merged_count', 1),  # Show how many ads were merged
+                                    'Product': ad['metadata'].get('product', 'Unknown'),
+                                    'Creator': ad['metadata'].get('creator', 'Unknown'),
+                                    'Agency': ad['metadata'].get('agency', 'Unknown'),
+                                    'Spend': get_metric_value(ad, 'spend', data_source),
+                                    'ROAS': get_metric_value(ad, 'roas', data_source),
+                                    'CTR': (get_metric_value(ad, 'meta_link_clicks', data_source) / get_metric_value(ad, 'impressions', data_source) * 100) if get_metric_value(ad, 'impressions', data_source) > 0 else 0,
+                                    'CPM': (get_metric_value(ad, 'spend', data_source) / get_metric_value(ad, 'impressions', data_source) * 1000) if get_metric_value(ad, 'impressions', data_source) > 0 else 0,
+                                    'Thumbstop': (get_metric_value(ad, 'meta_3s_video_views', data_source) / get_metric_value(ad, 'impressions', data_source) * 100) if get_metric_value(ad, 'meta_3s_video_views', data_source) > 0 else 0,
+                                    'AOV': get_metric_value(ad, 'attributed_rev', data_source) / get_metric_value(ad, 'transactions', data_source) if get_metric_value(ad, 'transactions', data_source) > 0 else 0,
+                                    'Revenue': get_metric_value(ad, 'attributed_rev', data_source),
+                                    'Transactions': get_metric_value(ad, 'transactions', data_source),
+                                    'Impressions': get_metric_value(ad, 'impressions', data_source),
+                                    'Link Clicks': get_metric_value(ad, 'meta_link_clicks', data_source),
+                                    'Video Views': get_metric_value(ad, 'meta_3s_video_views', data_source)
+                                })
+                            
+                            all_ads_df = pd.DataFrame(all_ads_data)
+                            # Sort by raw numeric values before formatting
+                            all_ads_df = all_ads_df.sort_values('Spend', ascending=False)
+                            
+                            # Format the display values for all ads
+                            display_all_ads_df = all_ads_df.copy()
+                            display_all_ads_df['Spend'] = display_all_ads_df['Spend'].apply(format_currency)
+                            display_all_ads_df['Revenue'] = display_all_ads_df['Revenue'].apply(format_currency)
+                            display_all_ads_df['ROAS'] = display_all_ads_df['ROAS'].apply(lambda x: f"{x:.2f}")
+                            display_all_ads_df['CTR'] = display_all_ads_df['CTR'].apply(lambda x: f"{x:.2f}%")
+                            display_all_ads_df['CPM'] = display_all_ads_df['CPM'].apply(lambda x: f"${x:.2f}")
+                            display_all_ads_df['Thumbstop'] = display_all_ads_df['Thumbstop'].apply(lambda x: f"{x:.2f}%")
+                            display_all_ads_df['AOV'] = display_all_ads_df['AOV'].apply(lambda x: f"${x:.2f}")
+                            display_all_ads_df['Transactions'] = display_all_ads_df['Transactions'].apply(lambda x: f"{x:,.0f}")
+                            display_all_ads_df['Impressions'] = display_all_ads_df['Impressions'].apply(lambda x: f"{x:,.0f}")
+                            display_all_ads_df['Link Clicks'] = display_all_ads_df['Link Clicks'].apply(lambda x: f"{x:,.0f}")
+                            display_all_ads_df['Video Views'] = display_all_ads_df['Video Views'].apply(lambda x: f"{x:,.0f}")
                             
                             st.dataframe(
                                 display_all_ads_df,
@@ -3419,8 +3486,21 @@ def display_campaign_explorer_tab(ad_objects, top_n=DEFAULT_TOP_N, core_products
                     # Top N Creators for selected campaign and product
                     st.subheader(f"👥 Top {top_n} Creators")
                     
-                    # Group by creator using the same approach as All Ads tab
-                    creators_grouped_df = ads_df.groupby('Creator').agg({
+                    # Group by creator using ALL ads (not just filtered ones)
+                    all_creators_data = []
+                    for ad in product_ads:
+                        all_creators_data.append({
+                            'Creator': ad['metadata'].get('creator', 'Unknown'),
+                            'Spend': get_metric_value(ad, 'spend', data_source),
+                            'Revenue': get_metric_value(ad, 'attributed_rev', data_source),
+                            'Transactions': get_metric_value(ad, 'transactions', data_source),
+                            'Impressions': get_metric_value(ad, 'impressions', data_source),
+                            'Link Clicks': get_metric_value(ad, 'meta_link_clicks', data_source),
+                            'Video Views': get_metric_value(ad, 'meta_3s_video_views', data_source)
+                        })
+                    
+                    all_creators_df_raw = pd.DataFrame(all_creators_data)
+                    creators_grouped_df = all_creators_df_raw.groupby('Creator').agg({
                         'Spend': 'sum',
                         'Revenue': 'sum',
                         'Transactions': 'sum',
