@@ -28,6 +28,9 @@ from media_urls_manager import (
     load_media_urls_cache
 )
 
+# Import authentication module
+from auth import require_authentication, show_logout_button
+
 # ===== CONFIGURATION & CONSTANTS =====
 # Load environment variables
 from dotenv import load_dotenv
@@ -3689,6 +3692,10 @@ def display_product_creator_explorer_tab(ad_objects):
         st.warning("⚠️ No ads found matching the selected filters. Please try different combinations.")
 
 def main():
+    # Check authentication first
+    if not require_authentication():
+        return
+    
     st.title("🎯 Campaign Reporting Dashboard")
     
 
@@ -3709,6 +3716,11 @@ def main():
     
     # Sidebar with configuration
     st.sidebar.header("⚙️ Configuration")
+    
+    # Add logout button at the top of sidebar
+    show_logout_button()
+    
+    st.sidebar.markdown("---")
     
     # Editable configuration
     st.sidebar.subheader("📅 Date Range")
