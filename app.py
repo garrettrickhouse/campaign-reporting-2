@@ -1519,20 +1519,15 @@ def merge_data(northbeam_data, meta_data, date_from=None, date_to=None):
 
 def get_metric_value(ad, metric_key, data_source='northbeam', default=0.0):
     """Get metric value from ad object, handling missing/invalid values"""
-    # Safety check for USE_NORTHBEAM_DATA - if not set, default to True
-    import sys
-    current_module = sys.modules[__name__]
-    use_northbeam = getattr(current_module, 'USE_NORTHBEAM_DATA', True)
     
-    
-    if use_northbeam:
-        # When USE_NORTHBEAM_DATA is True, only use Northbeam data or return 0
+    # Use the data_source parameter instead of the hardcoded module variable
+    if data_source == 'northbeam':
+        # Use Northbeam data
         value = ad['metrics']['northbeam'].get(metric_key, default)
         result = float(value) if value != '' and value is not None else default
         return result
-    else:
-        # When USE_NORTHBEAM_DATA is False, only use Meta data
-        # Map Northbeam keys to Meta keys
+    elif data_source == 'meta':
+        # Use Meta data - map Northbeam keys to Meta keys
         meta_key_mapping = {
             'spend': 'spend',
             'impressions': 'impressions',
@@ -1545,6 +1540,11 @@ def get_metric_value(ad, metric_key, data_source='northbeam', default=0.0):
         
         meta_key = meta_key_mapping.get(metric_key, metric_key)
         value = ad['metrics']['meta'].get(meta_key, default)
+        result = float(value) if value != '' and value is not None else default
+        return result
+    else:
+        # Fallback to Northbeam if data_source is not recognized
+        value = ad['metrics']['northbeam'].get(metric_key, default)
         result = float(value) if value != '' and value is not None else default
         return result
 
@@ -3900,10 +3900,6 @@ def main():
     if generate_button:
         # Generate report with status messages
         
-        # Show loading message in main area only if no data is loaded yet
-        if not st.session_state.get('comprehensive_ads'):
-            st.info("⏱️ **Data fetching in progress...** This may take several minutes depending on the number of ads and data sources selected. Please be patient while we gather your campaign data.")
-        
         try:
             # Temporarily update the global variables for this session
             main.DATE_FROM = date_from
@@ -3942,7 +3938,10 @@ def main():
             # Update progress - Step 1: Checking existing data
             auto_hide_status_message("🔍 Step 1/4: Fetching Meta & Northbeam data. This may take a few minutes.", "info")
             
-                        # Fetch data using concurrent configuration for better performance
+            # Show loading message in main area during data fetching
+            loading_placeholder = st.info("⏱️ **Data fetching in progress...** This may take several minutes depending on the number of ads and data sources selected. Please be patient while we gather your campaign data.")
+            
+            # Fetch data using concurrent configuration for better performance
             meta_insights, northbeam_df = fetch_all_data_concurrently(date_from, date_to, use_cached_files, use_meta, use_northbeam)
             
             # Update progress - Step 2: Data fetched
@@ -4061,6 +4060,10 @@ def main():
                 
                 # Debug: Show final data
                 auto_hide_status_message(f"✅ Report generated successfully! {len(comprehensive_ads)} comprehensive ads created", "success")
+                
+                # Clear the loading message since data is now loaded
+                if 'loading_placeholder' in locals():
+                    loading_placeholder.empty()
                 
                 # Process existing media URLs immediately for instant display
                 comprehensive_ads = process_existing_media_urls(comprehensive_ads)
