@@ -19,7 +19,7 @@ from googleapiclient.errors import HttpError
 # Import functions from app module
 from app import (
     calculate_campaign_metrics, get_metric_value, merge_ads_with_same_name,
-    clean_nan_values, format_date_for_filename, get_target_roas
+    clean_nan_values, format_date_for_filename, get_target_roas, get_ad_url
 )
 
 # ===== CONFIGURATION & CONSTANTS =====
@@ -261,8 +261,15 @@ def generate_markdown_report(ad_objects, date_from, date_to, top_n=5, core_produ
         for i, ad in enumerate(ad_objects):
             try:
                 print(f"🔍 DEBUG: Processing ad {i+1}/{len(ad_objects)}")
+                
+                # Get ad URL for hyperlinking
+                ad_id = ad['ad_ids'].get('ad_id', '')
+                ad_type = ad['metadata'].get('ad_type', 'Unknown')
+                primary_url, thumbnail_url = get_ad_url(ad_id, ad_type) if ad_id else ("", "")
+                
                 ads_data.append({
                     'ad_name': ad['ad_ids']['ad_name'],
+                    'ad_url': primary_url,  # Store URL for hyperlinking
                     'campaign': ad['metadata'].get('campaign_type', 'Unknown'),
                     'product': ad['metadata'].get('product', 'Unknown'),
                     'ad_type': ad['metadata'].get('ad_type', 'Unknown'),
@@ -288,7 +295,12 @@ def generate_markdown_report(ad_objects, date_from, date_to, top_n=5, core_produ
         top_ads = ads_df.head(top_n)
         
         for i, (_, ad) in enumerate(top_ads.iterrows(), 1):
-            report += f"| {i} | {ad['ad_name']} | {ad['campaign']} | {ad['product']} | {ad['ad_type']} | {ad['creator']} | {ad['agency']} | ${ad['spend']:,.2f} | {ad['roas']:.2f}x | {ad['ctr']:.2f}% | ${ad['cpm']:.2f} | {ad['thumbstop']:.1f}% | ${ad['aov']:.2f} |\n"
+            # Create hyperlink for ad name if URL exists
+            ad_name_display = ad['ad_name']
+            if ad['ad_url']:
+                ad_name_display = f"[{ad['ad_name']}]({ad['ad_url']})"
+            
+            report += f"| {i} | {ad_name_display} | {ad['campaign']} | {ad['product']} | {ad['ad_type']} | {ad['creator']} | {ad['agency']} | ${ad['spend']:,.2f} | {ad['roas']:.2f}x | {ad['ctr']:.2f}% | ${ad['cpm']:.2f} | {ad['thumbstop']:.1f}% | ${ad['aov']:.2f} |\n"
         
         # Top N Products
         report += f"""
@@ -489,8 +501,14 @@ def generate_markdown_report(ad_objects, date_from, date_to, top_n=5, core_produ
                 
                 product_ads_data = []
                 for ad in filtered_ads:
+                    # Get ad URL for hyperlinking
+                    ad_id = ad['ad_ids'].get('ad_id', '')
+                    ad_type = ad['metadata'].get('ad_type', 'Unknown')
+                    primary_url, thumbnail_url = get_ad_url(ad_id, ad_type) if ad_id else ("", "")
+                    
                     product_ads_data.append({
                         'ad_name': ad['ad_ids']['ad_name'],
+                        'ad_url': primary_url,  # Store URL for hyperlinking
                         'spend': get_metric_value(ad, 'spend', data_source),
                         'roas': get_metric_value(ad, 'roas', data_source),
                         'ctr': (get_metric_value(ad, 'meta_link_clicks', data_source) / get_metric_value(ad, 'impressions', data_source) * 100) if get_metric_value(ad, 'impressions', data_source) > 0 else 0,
@@ -504,7 +522,12 @@ def generate_markdown_report(ad_objects, date_from, date_to, top_n=5, core_produ
                 top_product_ads = product_ads_df.head(top_n)
                 
                 for i, (_, ad) in enumerate(top_product_ads.iterrows(), 1):
-                    report += f"| {i} | {ad['ad_name']} | ${ad['spend']:,.2f} | {ad['roas']:.2f}x | {ad['ctr']:.2f}% | ${ad['cpm']:.2f} | {ad['thumbstop']:.1f}% | ${ad['aov']:.2f} |\n"
+                    # Create hyperlink for ad name if URL exists
+                    ad_name_display = ad['ad_name']
+                    if ad['ad_url']:
+                        ad_name_display = f"[{ad['ad_name']}]({ad['ad_url']})"
+                    
+                    report += f"| {i} | {ad_name_display} | ${ad['spend']:,.2f} | {ad['roas']:.2f}x | {ad['ctr']:.2f}% | ${ad['cpm']:.2f} | {ad['thumbstop']:.1f}% | ${ad['aov']:.2f} |\n"
                 
                 # Get top creators for this product
                 product_creators_df = calculate_aggregated_metrics(product_ads, 'creator', 10000)
