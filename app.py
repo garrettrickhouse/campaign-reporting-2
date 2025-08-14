@@ -4022,8 +4022,24 @@ def main():
                 # Save locally if enabled
                 if DOWNLOAD_REPORTS_LOCALLY:
                     os.makedirs(f"{ROOT_DIRECTORY}/processed/comprehensive_ads", exist_ok=True)
+                    
+                    # Convert data to JSON-serializable format
+                    def make_json_serializable(obj):
+                        if isinstance(obj, dict):
+                            return {key: make_json_serializable(value) for key, value in obj.items()}
+                        elif isinstance(obj, list):
+                            return [make_json_serializable(item) for item in obj]
+                        elif hasattr(obj, 'strftime'):  # Handle date objects
+                            return obj.strftime('%Y-%m-%d')
+                        elif hasattr(obj, 'isoformat'):  # Handle datetime objects
+                            return obj.isoformat()
+                        else:
+                            return obj
+                    
+                    json_serializable_data = make_json_serializable(comprehensive_ads)
+                    
                     with open(comprehensive_filename, 'w') as f:
-                        json.dump(comprehensive_ads, f, indent=2)
+                        json.dump(json_serializable_data, f, indent=2)
                 
                 # Store data in session state for persistence across reruns
                 st.session_state.comprehensive_ads = comprehensive_ads
