@@ -3366,12 +3366,18 @@ def display_campaign_explorer_tab(ad_objects, top_n=DEFAULT_TOP_N, core_products
                             column_config={
                                 "Thumbnail": st.column_config.ImageColumn(
                                     "Thumbnail",
-                                    width="small"
+                                    width="small",
+                                    pinned="left"
+                                ),
+                                "Ad Type": st.column_config.TextColumn(
+                                    "Ad Type",
+                                    pinned="left"
                                 ),
                                 "Link": st.column_config.LinkColumn(
                                     "Link",
                                     help="Click to view ad preview",
-                                    display_text="🔗"
+                                    display_text="🔗",
+                                    pinned="left"
                                 )
                             },
                             use_container_width=True,
@@ -3388,12 +3394,18 @@ def display_campaign_explorer_tab(ad_objects, top_n=DEFAULT_TOP_N, core_products
                                 column_config={
                                     "Thumbnail": st.column_config.ImageColumn(
                                         "Thumbnail",
-                                        width="small"
+                                        width="small",
+                                        pinned="left"
+                                    ),
+                                    "Ad Type": st.column_config.TextColumn(
+                                        "Ad Type",
+                                        pinned="left"
                                     ),
                                     "Link": st.column_config.LinkColumn(
                                         "Link",
                                         help="Click to view ad preview",
-                                        display_text="🔗"
+                                        display_text="🔗",
+                                        pinned="left"
                                     )
                                 },
                                 use_container_width=True,
