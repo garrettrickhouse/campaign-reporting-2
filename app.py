@@ -2508,12 +2508,37 @@ def display_summary_tab(ad_objects, top_n=DEFAULT_TOP_N):
     # Create display dataframe with thumbnail column
     display_df = top_ads_df.copy()
     
+    # Format the display dataframe for the top N ads
+    display_df_formatted = display_df.copy()
+    if 'Spend' in display_df_formatted.columns:
+        display_df_formatted['Spend'] = display_df_formatted['Spend'].apply(format_currency)
+    if 'Revenue' in display_df_formatted.columns:
+        display_df_formatted['Revenue'] = display_df_formatted['Revenue'].apply(format_currency)
+    if 'ROAS' in display_df_formatted.columns:
+        display_df_formatted['ROAS'] = display_df_formatted['ROAS'].apply(format_roas)
+    if 'CTR' in display_df_formatted.columns:
+        display_df_formatted['CTR'] = display_df_formatted['CTR'].apply(format_percentage)
+    if 'CPM' in display_df_formatted.columns:
+        display_df_formatted['CPM'] = display_df_formatted['CPM'].apply(format_currency)
+    if 'Thumbstop' in display_df_formatted.columns:
+        display_df_formatted['Thumbstop'] = display_df_formatted['Thumbstop'].apply(format_percentage)
+    if 'AOV' in display_df_formatted.columns:
+        display_df_formatted['AOV'] = display_df_formatted['AOV'].apply(format_currency)
+    if 'Transactions' in display_df_formatted.columns:
+        display_df_formatted['Transactions'] = display_df_formatted['Transactions'].apply(format_large_number)
+    if 'Impressions' in display_df_formatted.columns:
+        display_df_formatted['Impressions'] = display_df_formatted['Impressions'].apply(format_large_number)
+    if 'Link Clicks' in display_df_formatted.columns:
+        display_df_formatted['Link Clicks'] = display_df_formatted['Link Clicks'].apply(format_large_number)
+    if 'Video Views' in display_df_formatted.columns:
+        display_df_formatted['Video Views'] = display_df_formatted['Video Views'].apply(format_large_number)
+    
     # Create a unique key that changes when data source changes to force table refresh
     current_view_source = st.session_state.get('current_view_source', 'Meta')
     summary_table_key = f"summary_table_{current_view_source}_{len(ads_df)}"
     
     st.dataframe(
-        display_df,
+        display_df_formatted,
         column_config={
             "Thumbnail": st.column_config.ImageColumn(
                 "Thumbnail",
@@ -2541,11 +2566,36 @@ def display_summary_tab(ad_objects, top_n=DEFAULT_TOP_N):
         # Create display dataframe with thumbnail column
         display_ads_df = ads_df.copy()
         
+        # Format the display dataframe for all ads
+        display_ads_df_formatted = display_ads_df.copy()
+        if 'Spend' in display_ads_df_formatted.columns:
+            display_ads_df_formatted['Spend'] = display_ads_df_formatted['Spend'].apply(format_currency)
+        if 'Revenue' in display_ads_df_formatted.columns:
+            display_ads_df_formatted['Revenue'] = display_ads_df_formatted['Revenue'].apply(format_currency)
+        if 'ROAS' in display_ads_df_formatted.columns:
+            display_ads_df_formatted['ROAS'] = display_ads_df_formatted['ROAS'].apply(format_roas)
+        if 'CTR' in display_ads_df_formatted.columns:
+            display_ads_df_formatted['CTR'] = display_ads_df_formatted['CTR'].apply(format_percentage)
+        if 'CPM' in display_ads_df_formatted.columns:
+            display_ads_df_formatted['CPM'] = display_ads_df_formatted['CPM'].apply(format_currency)
+        if 'Thumbstop' in display_ads_df_formatted.columns:
+            display_ads_df_formatted['Thumbstop'] = display_ads_df_formatted['Thumbstop'].apply(format_percentage)
+        if 'AOV' in display_ads_df_formatted.columns:
+            display_ads_df_formatted['AOV'] = display_ads_df_formatted['AOV'].apply(format_currency)
+        if 'Transactions' in display_ads_df_formatted.columns:
+            display_ads_df_formatted['Transactions'] = display_ads_df_formatted['Transactions'].apply(format_large_number)
+        if 'Impressions' in display_ads_df_formatted.columns:
+            display_ads_df_formatted['Impressions'] = display_ads_df_formatted['Impressions'].apply(format_large_number)
+        if 'Link Clicks' in display_ads_df_formatted.columns:
+            display_ads_df_formatted['Link Clicks'] = display_ads_df_formatted['Link Clicks'].apply(format_large_number)
+        if 'Video Views' in display_ads_df_formatted.columns:
+            display_ads_df_formatted['Video Views'] = display_ads_df_formatted['Video Views'].apply(format_large_number)
+        
         # Create a unique key for the expander table
         expander_table_key = f"expander_table_{current_view_source}_{len(ads_df)}"
         
         st.dataframe(
-            display_ads_df,
+            display_ads_df_formatted,
             column_config={
                 "Thumbnail": st.column_config.ImageColumn(
                     "Thumbnail",

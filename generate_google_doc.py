@@ -19,7 +19,7 @@ from googleapiclient.errors import HttpError
 # Import functions from app module
 from app import (
     calculate_campaign_metrics, get_metric_value, merge_ads_with_same_name,
-    clean_nan_values, format_date_for_filename
+    clean_nan_values, format_date_for_filename, get_target_roas
 )
 
 # ===== CONFIGURATION & CONSTANTS =====
@@ -448,22 +448,47 @@ def generate_markdown_report(ad_objects, date_from, date_to, top_n=5, core_produ
 **Summary:**
 - Total Ads: {product_metrics['total_ads']:,}
 - Total Spend: ${product_metrics['total_spend']:,.2f}
-- Total Revenue: ${product_metrics['total_revenue']:,.2f}
+- Total Revenue: ${product_metrics['total_revenue']:.2f}
 - ROAS: {product_metrics['roas']:.2f}x
 - CTR: {product_metrics['ctr']:.2f}%
 - CPM: ${product_metrics['cpm']:.2f}
 - Thumbstop: {product_metrics['thumbstop']:.1f}%
 - AOV: ${product_metrics['aov']:.2f}
-
-**Top Ads by Spend:**
+"""
+                
+                # Get target ROAS for this campaign
+                target_roas = get_target_roas(campaign)
+                
+                # Filter ads that meet or exceed ROAS goal for this campaign
+                if target_roas is not None:
+                    roas_goal_ads = []
+                    for ad in product_ads:
+                        ad_roas = get_metric_value(ad, 'roas', data_source)
+                        if ad_roas >= target_roas:
+                            roas_goal_ads.append(ad)
+                    
+                    if not roas_goal_ads:
+                        report += f"\n*No ads found for {product} in {campaign} campaign that meet the ROAS goal of {target_roas}*\n"
+                        continue
+                    
+                    # Use filtered ads for top N table
+                    filtered_ads = roas_goal_ads
+                    report += f"\n**Top {top_n} Spending Ads (> {target_roas} ROAS):**\n"
+                else:
+                    # No ROAS target defined, use all ads
+                    filtered_ads = product_ads
+                    report += f"\n**Top {top_n} Spending Ads:**\n"
+                    report += f"\n*No ROAS target defined for {campaign} campaign type*\n"
+                
+                # Get top ads for this product (filtered by ROAS if applicable)
+                report += f"""
 
 | Rank | Ad Name | Spend | ROAS | CTR | CPM | Thumbstop | AOV |
 |------|---------|-------|------|-----|-----|-----------|-----|
 """
                 
-                # Get top ads for this product
                 product_ads_data = []
-                for ad in product_ads:
+                for ad in filtered_ads:
                     product_ads_data.append({
                         'ad_name': ad['ad_ids']['ad_name'],
                         'spend': get_metric_value(ad, 'spend', data_source),
