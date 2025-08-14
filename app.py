@@ -69,9 +69,9 @@ NORTHBEAM_BASE_URL = "https://api.northbeam.io/v1"
 
 # Northbeam export configuration
 NORTHBEAM_MAX_RETRIES = 3      # 3 retries default
-NORTHBEAM_POLL_INTERVAL = 10       # How often to poll during export download (seconds)
-NORTHBEAM_RETRY_DELAY = 30         # Wait time between retry attempts (seconds)
-NORTHBEAM_POLLING_TIMEOUT = 120    # Base timeout for polling attempts (2 minutes)
+NORTHBEAM_RETRY_DELAY = 10         # Wait time between retry attempts (seconds)
+NORTHBEAM_POLL_INTERVAL = 5       # How often to poll during export download (seconds)
+NORTHBEAM_POLLING_TIMEOUT = 60    # Base timeout for polling attempts
 
 META_REQUEST_TIMEOUT = 30            # Timeout for Meta API requests
 META_RATE_LIMIT_DELAY = 0.5         # Delay between Meta API requests
@@ -3881,6 +3881,9 @@ def main():
     # Main content area
     if generate_button:
         # Generate report with status messages
+        
+        # Show loading message in main area
+        st.info("⏱️ **Data fetching in progress...** This may take several minutes depending on the number of ads and data sources selected. Please be patient while we gather your campaign data.")
         
         try:
             # Temporarily update the global variables for this session
