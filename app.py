@@ -13,11 +13,20 @@ import plotly.graph_objects as go
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 import concurrent.futures
-import threading
+# import threading  # Removed to fix infinite loop issue
 import calendar
 import traceback
 import hashlib
+import asyncio
 # Import statements for main functions will be removed as we merge them directly
+
+# Import media_urls_manager for handling media URLs
+from media_urls_manager import (
+    process_existing_media_urls,
+    fetch_missing_media_urls,
+    get_thumbnail_url_from_cache,
+    load_media_urls_cache
+)
 
 # ===== CONFIGURATION & CONSTANTS =====
 # Load environment variables
@@ -29,6 +38,9 @@ load_dotenv()
 # USE_NORTHBEAM_DATA = True  # Set to True to use Northbeam data for spend/revenue metrics
 DOWNLOAD_REPORTS_LOCALLY = False  # Set to True to save all fetched/processed data locally (in addition to S3)
 # Note: When DOWNLOAD_REPORTS_LOCALLY = False, files are only saved to S3, saving disk space
+
+# Root directory for S3 storage (updated to match actual S3 bucket structure)
+ROOT_DIRECTORY = "campaign-reporting"
 
 # Configuration - these will be set from frontend data
 # DATE_FROM = "2025-06-30" # Default start date
@@ -52,8 +64,19 @@ AWS_REGION = 'us-east-1'
 S3_BUCKET = os.getenv('S3_BUCKET')
 NORTHBEAM_BASE_URL = "https://api.northbeam.io/v1"
 
+# Northbeam export configuration
+NORTHBEAM_MAX_RETRIES = 3      # 3 retries default
+NORTHBEAM_RETRY_DELAY = 10         # Wait between retry attempts (10 seconds)  
+
+NORTHBEAM_POLL_INTERVAL = 5
+NORTHBEAM_BASE_DELAY = 15          # Base for exponential backoff (15s, 30s, 60s)
+
+META_REQUEST_TIMEOUT = 30            # Timeout for Meta API requests
+META_RATE_LIMIT_DELAY = 0.5         # Delay between Meta API requests
+
 # ===== META GRAPH API CONFIGURATION =====
-GRAPH_BASE = "https://graph.facebook.com/v23.0"  
+META_API_VERSION = os.getenv('META_API_VERSION', 'v23.0')  # Use exact working version
+GRAPH_BASE = f"https://graph.facebook.com/{META_API_VERSION}"  
 META_SYSTEM_USER_ACCESS_TOKEN = os.getenv('META_SYSTEM_USER_ACCESS_TOKEN')
 if not META_SYSTEM_USER_ACCESS_TOKEN:
     raise ValueError("META_SYSTEM_USER_ACCESS_TOKEN not set in .env file.")
@@ -79,10 +102,59 @@ META_ENDPOINT = f'{GRAPH_BASE}/act_{AD_ACCOUNT_ID}/insights'
 # ===== VIDEO FIELDS CONFIGURATION =====
 VIDEO_FIELDS = ["id", "permalink_url", "source", "thumbnails"]
 
+# ===== STATUS MESSAGES CONFIGURATION =====
+# Status messages now include timestamps and can be manually cleared
+
 # ===== UTILITY FUNCTIONS =====
-def format_date_for_filename(date_string):
-    """Format date string to YYYYMMDD format for filenames"""
-    return date_string.replace('-', '')
+def get_top_spending_ad_thumbnail(ad_objects, group_key, group_value):
+    """
+    Get the thumbnail from the top spending ad in a group.
+    
+    Args:
+        ad_objects: List of ad objects
+        group_key: The metadata key to group by (e.g., 'product', 'creator', 'agency')
+        group_value: The specific value to filter by
+    
+    Returns:
+        str: Thumbnail URL from the top spending ad, or empty string if not found
+    """
+    if not ad_objects:
+        return ""
+    
+    # Filter ads by the group criteria
+    filtered_ads = []
+    for ad in ad_objects:
+        if group_key == 'product':
+            # Handle product groups (check if ad's product is in the product group)
+            ad_product = ad['metadata'].get('product', '')
+            if ad_product == group_value:
+                filtered_ads.append(ad)
+        else:
+            # For creator, agency, etc.
+            if ad['metadata'].get(group_key, '') == group_value:
+                filtered_ads.append(ad)
+    
+    if not filtered_ads:
+        return ""
+    
+    # Sort by spend and get the top one
+    top_ad = max(filtered_ads, key=lambda ad: get_metric_value(ad, 'spend', default=0))
+    
+    # Get the thumbnail for this ad
+    ad_id = top_ad['ad_ids'].get('ad_id', '')
+    if ad_id:
+        return get_thumbnail_url_from_cache(ad_id)
+    
+    return ""
+
+def format_date_for_filename(date_input):
+    """Format date input to YYYYMMDD format for filenames"""
+    if isinstance(date_input, str):
+        return date_input.replace('-', '')
+    elif hasattr(date_input, 'strftime'):
+        return date_input.strftime("%Y%m%d")
+    else:
+        raise ValueError(f"Unsupported date type: {type(date_input)}")
 
 def get_meta_params(date_from, date_to):
     """Get Meta API parameters with dynamic date range"""
@@ -94,6 +166,93 @@ def get_meta_params(date_from, date_to):
         "limit": 200,
         "access_token": META_SYSTEM_USER_ACCESS_TOKEN
     }
+
+def auto_hide_status_message(message_key, message_type="info", auto_hide_seconds=5):
+    """
+    Display a status message in the sidebar. New messages clear old ones.
+    
+    Args:
+        message_key (str): The message to display
+        message_type (str): Type of message ('info', 'success', 'warning', 'error')
+        auto_hide_seconds (int): Seconds before message auto-hides (default: 5)
+    """
+    # Initialize session state for status messages if not exists
+    if 'status_messages' not in st.session_state:
+        st.session_state.status_messages = {}
+    
+    # Clear all existing messages - only show the latest one
+    st.session_state.status_messages = {}
+    
+    # Create single message entry
+    message_id = "latest_status"
+    
+    # Store message in session state with timestamp and auto-hide info
+    st.session_state.status_messages[message_id] = {
+        'type': message_type,
+        'timestamp': time.time(),
+        'auto_hide_seconds': auto_hide_seconds,
+        'message': message_key
+    }
+
+def display_status_messages():
+    """Display all active status messages in a compact, single location"""
+    if 'status_messages' not in st.session_state or not st.session_state.status_messages:
+        return
+    
+    # Create a compact status container
+    with st.container():
+        st.markdown("---")
+        
+        # Header with clear button and auto-refresh info
+        col1, col2, col3 = st.columns([2, 1, 1])
+        with col1:
+            st.subheader("📊 Status Messages")
+        with col2:
+            if st.button("🗑️ Clear All", help="Remove all status messages"):
+                st.session_state.status_messages = {}
+                st.rerun()
+        with col3:
+            st.caption("🔄 Auto-refreshes")
+        
+        # Display messages in a compact format
+        for message_id, message_data in list(st.session_state.status_messages.items()):
+            # Calculate time remaining
+            elapsed = time.time() - message_data['timestamp']
+            remaining = max(0, message_data['auto_hide_seconds'] - elapsed)
+            
+            # Auto-remove expired messages
+            if remaining <= 0:
+                del st.session_state.status_messages[message_id]
+                continue
+            
+            # Create progress bar for auto-hide countdown
+            progress = 1 - (remaining / message_data['auto_hide_seconds'])
+            
+            # Display message with type-specific styling
+            message_type = message_data['type']
+            message_text = message_data['message']
+            
+            if message_type == "info":
+                st.info(f"ℹ️ {message_text}")
+            elif message_type == "success":
+                st.success(f"✅ {message_text}")
+            elif message_type == "warning":
+                st.warning(f"⚠️ {message_text}")
+            elif message_type == "error":
+                st.error(f"❌ {message_text}")
+            
+            # Show countdown progress bar
+            st.progress(progress, text=f"Auto-hide in {remaining:.1f}s")
+            
+            # Individual dismiss button
+            if st.button(f"❌ Dismiss", key=f"dismiss_{message_id}", help="Remove this message"):
+                del st.session_state.status_messages[message_id]
+                st.rerun()
+            
+            st.markdown("---")
+        
+        # Note: Messages will auto-hide based on their timestamps
+        # The page will refresh naturally as users interact with it
 
 def get_northbeam_headers():
     """Headers for Northbeam API"""
@@ -124,11 +283,26 @@ def save_file_to_s3(file_path, s3_key):
         print(f"📁 Falling back to local storage only")
         return False
 
+def convert_dates_to_strings(obj):
+    """Recursively convert date objects to ISO format strings for JSON serialization"""
+    if isinstance(obj, dict):
+        return {key: convert_dates_to_strings(value) for key, value in obj.items()}
+    elif isinstance(obj, list):
+        return [convert_dates_to_strings(item) for item in obj]
+    elif isinstance(obj, (datetime, date)):
+        return obj.isoformat()
+    elif hasattr(obj, 'isoformat'):  # Handle other date-like objects
+        return obj.isoformat()
+    else:
+        return obj
+
 def save_json_to_s3(data, s3_key):
     """Save JSON data directly to S3"""
     try:
         s3_client = get_s3_client()
-        json_data = json.dumps(data, indent=2)
+        # Convert any date objects to strings before JSON serialization
+        serializable_data = convert_dates_to_strings(data)
+        json_data = json.dumps(serializable_data, indent=2)
         s3_client.put_object(
             Bucket=S3_BUCKET,
             Key=s3_key,
@@ -140,6 +314,25 @@ def save_json_to_s3(data, s3_key):
     except Exception as e:
         print(f"⚠️ S3 access denied or unavailable: {e}")
         print(f"📁 Falling back to local storage only")
+        return False
+
+def save_csv_to_s3(df, s3_key):
+    """Save CSV data directly to S3"""
+    try:
+        s3_client = get_s3_client()
+        csv_buffer = io.StringIO()
+        df.to_csv(csv_buffer, index=False)
+        csv_data = csv_buffer.getvalue()
+        s3_client.put_object(
+            Bucket=S3_BUCKET,
+            Key=s3_key,
+            Body=csv_data,
+            ContentType='text/csv'
+        )
+        print(f"✅ Saved CSV to S3: s3://{S3_BUCKET}/{s3_key}")
+        return True
+    except Exception as e:
+        print(f"❌ Failed to save CSV to S3: {e}")
         return False
 
 def load_json_from_s3(s3_key):
@@ -412,7 +605,7 @@ def extract_agency_from_ad_name(ad_name):
     
     return AD_ACCOUNT_NAME
 
-def extract_ad_metadata(ad_name, campaign_name, video_views_3s=0, video_keyword=None, static_keyword=None, carousel_keyword=None, ad_format=None, video_id=None, image_hash=None):
+def extract_ad_metadata(ad_name, campaign_name):
     """Extract all metadata from ad name and campaign name"""
     
     return {
@@ -445,9 +638,9 @@ def fetch_meta_insights(date_from=None, date_to=None):
             # print(f"🔄 Requesting insights page {page_num}...")
             
             if next_url == META_ENDPOINT:
-                resp = session.get(next_url, params=meta_params, timeout=30)
+                resp = session.get(next_url, params=meta_params, timeout=META_REQUEST_TIMEOUT)
             else:
-                resp = session.get(next_url, timeout=30)
+                resp = session.get(next_url, timeout=META_REQUEST_TIMEOUT)
                 
             if resp.status_code != 200:
                 print(f"❌ Error {resp.status_code}: {resp.text}")
@@ -503,7 +696,7 @@ def fetch_meta_insights(date_from=None, date_to=None):
             next_url = data.get("paging", {}).get("next")
             
             if next_url:
-                time.sleep(0.5)
+                time.sleep(META_RATE_LIMIT_DELAY)
 
         except Exception as e:
             print(f"❌ Unexpected error on page {page_num}: {e}")
@@ -520,13 +713,13 @@ def fetch_meta_insights(date_from=None, date_to=None):
         date_to_formatted = format_date_for_filename(date_to)
         
         # Save to S3
-        s3_key = f"campaign-reporting/raw/meta_insights/meta_insights_{date_from_formatted}-{date_to_formatted}.json"
+        s3_key = f"{ROOT_DIRECTORY}/raw/meta_insights/meta_insights_{date_from_formatted}-{date_to_formatted}.json"
         save_json_to_s3(ads_list, s3_key)
         
         # Save locally if enabled
         if DOWNLOAD_REPORTS_LOCALLY:
-            meta_json_filename = f"campaign-reporting/raw/meta_insights/meta_insights_{date_from_formatted}-{date_to_formatted}.json"
-            os.makedirs("campaign-reporting/raw/meta_insights", exist_ok=True)
+            meta_json_filename = f"{ROOT_DIRECTORY}/raw/meta_insights/meta_insights_{date_from_formatted}-{date_to_formatted}.json"
+            os.makedirs(f"{ROOT_DIRECTORY}/raw/meta_insights", exist_ok=True)
             with open(meta_json_filename, 'w') as f:
                 json.dump(ads_list, f, indent=2)
             print(f"💾 Saved raw Meta insights JSON: {meta_json_filename}")
@@ -561,6 +754,7 @@ def filter_attribution_data(df, target_accounting_mode, target_platform):
 def create_northbeam_export(start_date, end_date):
     """Create a Northbeam export"""
     
+    # Initial delay to avoid rate limits
     time.sleep(2)
     
     url = f"{NORTHBEAM_BASE_URL}/exports/data-export"
@@ -570,7 +764,6 @@ def create_northbeam_export(start_date, end_date):
 
     print("Start datetime: ", start_datetime)
     print("End datetime: ", end_datetime)
-
 
     payload = {
         "period_type": "FIXED",
@@ -589,7 +782,7 @@ def create_northbeam_export(start_date, end_date):
             "include_kind_and_platform": True
         },
         "time_granularity": "DAILY",
-        "export_file_name": f"NB_{start_date.replace('-', '')}-{end_date.replace('-', '')}",
+        "export_file_name": f"northbeam_{format_date_for_filename(start_date)}-{format_date_for_filename(end_date)}",
         "bucket_name": S3_BUCKET,
         "aws_role": "arn:aws:iam::881825931691:role/NorthbeamS3ExportRole",
         "level": "ad",
@@ -604,82 +797,137 @@ def create_northbeam_export(start_date, end_date):
         ]
     }
     
-    print(f"Northbeam export for {start_date} to {end_date}")
-    print(f"   - Period Type: {payload['period_type']}")
-    print(f"   - Attribution Model: {payload['attribution_options']['attribution_models']}")
-    print(f"   - Attribution Window: {payload['attribution_options']['attribution_windows']} days")
-    print(f"   - Accounting Mode: {payload['attribution_options']['accounting_modes']}")
-    print(f"   - Time Granularity: {payload['time_granularity']}")
-    print(f"   - Level: {payload['level']}")
-    print(f"   - Metrics Requested: {len(payload['metrics'])} metrics")
+    # Retry logic with exponential backoff
+    base_delay = NORTHBEAM_BASE_DELAY  # Start with 15 seconds (15s, 30s, 60s exponential backoff)
     
-    response = requests.post(url, headers=get_northbeam_headers(), json=payload)
+    for attempt in range(NORTHBEAM_MAX_RETRIES):
+        try:
+            response = requests.post(url, headers=get_northbeam_headers(), json=payload, timeout=60)
+            
+            if response.status_code == 201:
+                export_id = response.json().get('id')
+                print(f"✅ Export created successfully! ID: {export_id}")
+                return export_id
+            elif response.status_code == 429:
+                delay = NORTHBEAM_BASE_DELAY * (2 ** attempt)  # Exponential backoff
+                print(f"❌ Rate limit exceeded (429) on attempt {attempt + 1}: {response.text}")
+                print(f"⏱️ Waiting {delay} seconds before retrying...")
+                time.sleep(delay)
+                continue
+            elif response.status_code == 400:
+                print(f"❌ Bad request (400): {response.text}")
+                # Don't retry on 400 errors as they're likely configuration issues
+                return None
+            elif response.status_code >= 500:
+                delay = NORTHBEAM_BASE_DELAY * (2 ** attempt)
+                print(f"❌ Server error ({response.status_code}) on attempt {attempt + 1}: {response.text}")
+                print(f"⏱️ Waiting {delay} seconds before retrying...")
+                time.sleep(delay)
+                continue
+            else:
+                print(f"❌ Export creation failed: {response.status_code}")
+                print(f"Response: {response.text}")
+                return None
+                
+        except requests.exceptions.Timeout:
+            delay = NORTHBEAM_BASE_DELAY * (2 ** attempt)
+            print(f"⏰ Request timeout on attempt {attempt + 1}")
+            print(f"⏱️ Waiting {delay} seconds before retrying...")
+            time.sleep(delay)
+            continue
+        except requests.exceptions.RequestException as e:
+            delay = NORTHBEAM_BASE_DELAY * (2 ** attempt)
+            print(f"❌ Request error on attempt {attempt + 1}: {e}")
+            print(f"⏱️ Waiting {delay} seconds before retrying...")
+            time.sleep(delay)
+            continue
     
-    if response.status_code == 201:
-        export_id = response.json().get('id')
-        print(f"✅ Export created successfully! ID: {export_id}")
-        return export_id
-    elif response.status_code == 429:
-        print(f"❌ Rate limit exceeded (429): {response.text}")
-        print("⏱️ Waiting 60 seconds before retrying...")
-        time.sleep(60)
-        print("🔄 Retrying export creation...")
-        response = requests.post(url, headers=get_northbeam_headers(), json=payload)
-        if response.status_code == 201:
-            export_id = response.json().get('id')
-            print(f"✅ Export created successfully on retry! ID: {export_id}")
-            return export_id
-        else:
-            print(f"❌ Export creation failed on retry: {response.status_code}")
-            print(f"Response: {response.text}")
-            return None
-    else:
-        print(f"❌ Export creation failed: {response.status_code}")
-        print(f"Response: {response.text}")
-        return None
+    print(f"❌ Export creation failed after {NORTHBEAM_MAX_RETRIES} attempts")
+    return None
 
-def poll_northbeam_export_status(export_id, timeout_seconds=30, poll_interval=5):
-    """Poll Northbeam for export status until ready"""
+def poll_northbeam_export_status(export_id, timeout_seconds=20, poll_interval=5):
+    """Poll Northbeam for export status until ready with configurable timeout and interval"""
     
     url = f"{NORTHBEAM_BASE_URL}/exports/data-export/result/{export_id}"
     
     start_time = time.time()
     poll_count = 0
+    consecutive_errors = 0
+    max_consecutive_errors = 3
+    
     while time.time() - start_time < timeout_seconds:
         poll_count += 1
         print(f"  🔄 Poll attempt {poll_count}...")
         
-        response = requests.get(url, headers=get_northbeam_headers())
-        
-        if response.status_code == 200:
-            data = response.json()
-            status = data.get("status")
+        try:
+            response = requests.get(url, headers=get_northbeam_headers(), timeout=60)
             
-            print(f"  ↪ Status: {status}")
-            
-            if status in ["ready", "SUCCESS", "success"]:
-                result_links = data.get("result", [])
-                if result_links and len(result_links) > 0:
-                    print(f"✅ Export ready. File URL: {result_links[0]}")
-                    return result_links[0]
-                else:
-                    print(f"✅ Export completed, falling back to S3...")
+            if response.status_code == 200:
+                data = response.json()
+                status = data.get("status")
+                
+                print(f"  ↪ Status: {status}")
+                
+                # Reset error counter on successful response
+                consecutive_errors = 0
+                
+                if status in ["ready", "SUCCESS", "success", "COMPLETED"]:
+                    result_links = data.get("result", [])
+                    if result_links and len(result_links) > 0:
+                        print(f"✅ Export ready. File URL: {result_links[0]}")
+                        return result_links[0]
+                    else:
+                        print(f"✅ Export completed, falling back to S3...")
+                        return None
+                elif status in ["PENDING", "PROCESSING", "IN_PROGRESS"]:
+                    # Export is still processing, continue polling
+                    print(f"  ⏳ Export still processing...")
+                elif status in ["FAILED", "ERROR", "CANCELLED"]:
+                    print(f"❌ Export failed with status: {status}")
+                    if "error" in data:
+                        print(f"  Error details: {data['error']}")
                     return None
-        elif response.status_code == 429:
-            print(f"  ⚠️ Rate limit hit during polling, waiting 30 seconds...")
-            time.sleep(30)
-            continue
+                else:
+                    print(f"  ⚠️ Unknown status: {status}")
+                    
+            elif response.status_code == 429:
+                consecutive_errors += 1
+                wait_time = min(NORTHBEAM_BASE_DELAY * consecutive_errors, NORTHBEAM_BASE_DELAY * 12)  # Exponential backoff up to 3 minutes
+                print(f"  ⚠️ Rate limit hit during polling (attempt {consecutive_errors}), waiting {wait_time} seconds...")
+                time.sleep(wait_time)
+                continue
+            elif response.status_code == 404:
+                print(f"❌ Export not found (404) - may have been deleted or expired")
+                return None
+            else:
+                consecutive_errors += 1
+                print(f"  ❌ HTTP {response.status_code}: {response.text}")
+                
+        except requests.exceptions.Timeout:
+            consecutive_errors += 1
+            print(f"  ⏰ Request timeout on poll attempt {poll_count}")
+        except requests.exceptions.RequestException as e:
+            consecutive_errors += 1
+            print(f"  ❌ Request error on poll attempt {poll_count}: {e}")
         
-        time.sleep(poll_interval)
+        # If we have too many consecutive errors, increase wait time
+        if consecutive_errors >= max_consecutive_errors:
+            print(f"  ⚠️ Too many consecutive errors, increasing wait time...")
+            time.sleep(poll_interval * 2)
+            consecutive_errors = 0  # Reset after longer wait
+        else:
+            time.sleep(poll_interval)
     
-    print(f"❌ Export polling timed out")
+    print(f"❌ Export polling timed out after {timeout_seconds} seconds")
+    print(f"   - Total poll attempts: {poll_count}")
+    print(f"   - Export will be retried with increased timeout")
     return None
 
-def download_export_data(export_id, start_date, end_date):
-    """Download the export data"""
+def download_export_data(export_id, start_date, end_date, timeout_seconds=20, poll_interval=5):
+    """Download the export data with configurable timeout and S3 fallback"""
     
-    # Try direct download first
-    direct_url = poll_northbeam_export_status(export_id)
+    # Try direct download first with specified timeout and interval
+    direct_url = poll_northbeam_export_status(export_id, timeout_seconds=timeout_seconds, poll_interval=poll_interval)
     if direct_url:
         try:
             response = requests.get(direct_url)
@@ -693,8 +941,8 @@ def download_export_data(export_id, start_date, end_date):
                 
                 # Save CSV locally (only if local saving is enabled)
                 if DOWNLOAD_REPORTS_LOCALLY:
-                    csv_filename = f"campaign-reporting/raw/northbeam/northbeam_{start_date.replace('-', '')}-{end_date.replace('-', '')}.csv"
-                    os.makedirs("campaign-reporting/raw/northbeam", exist_ok=True)
+                    csv_filename = f"{ROOT_DIRECTORY}/raw/northbeam/northbeam_{format_date_for_filename(start_date)}-{format_date_for_filename(end_date)}.csv"
+                    os.makedirs(f"{ROOT_DIRECTORY}/raw/northbeam", exist_ok=True)
                     df.to_csv(csv_filename, index=False)
                     print(f"💾 Saved Northbeam CSV locally: {csv_filename}")
                 
@@ -702,16 +950,30 @@ def download_export_data(export_id, start_date, end_date):
         except Exception as e:
             print(f"❌ Direct download failed: {e}")
     
-    # Fallback to S3
-    print(f"⚠️ Falling back to S3...")
+    # Fallback to S3 - check for existing processed data
+    print(f"⚠️ Export timed out, checking S3 for existing data...")
     s3_client = get_s3_client()
     try:
+        # First check for processed data in our campaign-reporting directory
+        processed_key = f"{ROOT_DIRECTORY}/raw/northbeam/northbeam_{format_date_for_filename(start_date)}-{format_date_for_filename(end_date)}.csv"
+        if file_exists_in_s3(processed_key):
+            print(f"📁 Found existing processed data in S3: {processed_key}")
+            response = s3_client.get_object(Bucket=S3_BUCKET, Key=processed_key)
+            df = pd.read_csv(io.BytesIO(response['Body'].read()), dtype={
+                'ad_id': str,
+                'campaign_id': str,
+                'adset_id': str
+            })
+            print(f"✅ Downloaded {len(df)} rows from existing S3 data")
+            return df
+        
+        # Fallback to checking Northbeam's S3 bucket for raw exports
         response = s3_client.list_objects_v2(Bucket=S3_BUCKET, MaxKeys=100)
         if 'Contents' in response:
             matching_files = []
             for obj in response['Contents']:
                 key = obj['Key']
-                if key.startswith(f"NB_{start_date.replace('-', '')}-{end_date.replace('-', '')}") and key.endswith('.csv'):
+                if key.startswith(f"northbeam_{format_date_for_filename(start_date)}-{format_date_for_filename(end_date)}") and key.endswith('.csv'):
                     matching_files.append({
                         'key': key,
                         'last_modified': obj['LastModified']
@@ -720,21 +982,20 @@ def download_export_data(export_id, start_date, end_date):
             if matching_files:
                 matching_files.sort(key=lambda x: x['last_modified'], reverse=True)
                 actual_file_key = matching_files[0]['key']
-                print(f"📁 Found S3 file: {actual_file_key}")
+                print(f"📁 Found raw export in S3: {actual_file_key}")
                 
                 response = s3_client.get_object(Bucket=S3_BUCKET, Key=actual_file_key)
-                # Read CSV with specific dtype to ensure ID columns are treated as strings
                 df = pd.read_csv(io.BytesIO(response['Body'].read()), dtype={
                     'ad_id': str,
                     'campaign_id': str,
                     'adset_id': str
                 })
-                print(f"✅ Downloaded {len(df)} rows from S3")
+                print(f"✅ Downloaded {len(df)} rows from raw S3 export")
                 
                 # Save CSV locally (only if local saving is enabled)
                 if DOWNLOAD_REPORTS_LOCALLY:
-                    csv_filename = f"campaign-reporting/raw/northbeam/northbeam_{start_date.replace('-', '')}-{end_date.replace('-', '')}.csv"
-                    os.makedirs("campaign-reporting/raw/northbeam", exist_ok=True)
+                    csv_filename = f"{ROOT_DIRECTORY}/raw/northbeam/northbeam_{format_date_for_filename(start_date)}-{format_date_for_filename(end_date)}.csv"
+                    os.makedirs(f"{ROOT_DIRECTORY}/raw/northbeam", exist_ok=True)
                     df.to_csv(csv_filename, index=False)
                     print(f"💾 Saved Northbeam CSV locally: {csv_filename}")
                 
@@ -750,60 +1011,261 @@ def download_export_data(export_id, start_date, end_date):
         return None
 
 def fetch_northbeam_data(date_from=None, date_to=None):
-    """Fetch Northbeam data for the specified date range"""
+    """Fetch Northbeam data for the specified date range with exponential backoff retry logic"""
     # Safety check for date_from and date_to - if not set, raise error
     if date_from is None or date_to is None:
         raise ValueError("date_from and date_to must be provided to fetch_northbeam_data")
     
     print(f"\n🔄 Fetching Northbeam data for {date_from} to {date_to}...")
     
-    # Create export
-    export_id = create_northbeam_export(date_from, date_to)
-    if not export_id:
-        print("❌ Failed to create Northbeam export")
-        return None
+    # Exponential backoff configuration: (poll_interval, timeout)
+    backoff_config = [
+        (NORTHBEAM_POLL_INTERVAL, 15),                    # 1st attempt: every 5s for 15s
+        (NORTHBEAM_POLL_INTERVAL * 2, 30),               # 2nd attempt: every 10s for 30s  
+        (NORTHBEAM_POLL_INTERVAL * 3, 45)                # 3rd attempt: every 15s for 45s
+    ]
     
-    # Download data
-    df = download_export_data(export_id, date_from, date_to)
-    if df is None:
-        print("❌ Failed to download Northbeam data")
-        return None
+    # Try up to 3 times with exponential backoff
+    for attempt in range(1, NORTHBEAM_MAX_RETRIES + 1):
+        print(f"📊 Attempt {attempt}/{NORTHBEAM_MAX_RETRIES}")
+        
+        # Get backoff settings for this attempt
+        poll_interval, timeout = backoff_config[attempt - 1]
+        print(f"⏱️  Polling: every {poll_interval}s for {timeout}s total")
+        
+        # Create export
+        export_id = create_northbeam_export(date_from, date_to)
+        if not export_id:
+            print(f"❌ Attempt {attempt}: Failed to create Northbeam export")
+            if attempt < NORTHBEAM_MAX_RETRIES:
+                print("🔄 Retrying immediately...")
+                continue
+            else:
+                print("❌ All attempts failed - giving up")
+                return None
+        
+        # Download data with exponential backoff timeout and interval
+        df = download_export_data(export_id, date_from, date_to, timeout, poll_interval)
+        if df is not None:
+            # Success! Filter and save data
+            filtered_df = filter_attribution_data(df, ACCOUNTING_MODE_FILTER, NORTHBEAM_PLATFORM)
+            
+            # Save filtered data
+            date_from_formatted = format_date_for_filename(date_from)
+            date_to_formatted = format_date_for_filename(date_to)
+            
+            # Save to S3
+            raw_northbeam_directory = f"{ROOT_DIRECTORY}/raw/northbeam/"
+            raw_northbeam_filename = f"northbeam_{date_from_formatted}-{date_to_formatted}.csv"
+            csv_file_path = raw_northbeam_directory + raw_northbeam_filename
+            save_csv_to_s3(filtered_df, csv_file_path)
+            
+            # Save locally if enabled
+            if DOWNLOAD_REPORTS_LOCALLY:
+                os.makedirs(raw_northbeam_directory, exist_ok=True)
+                filtered_df.to_csv(csv_file_path, index=False)
+                print(f"💾 Saved Northbeam CSV: {csv_file_path}")
+            else:
+                print(f"💾 Northbeam CSV saved to S3 only (local saving disabled)")
+            
+            print(f"✅ Attempt {attempt} succeeded!")
+            return filtered_df
+        
+        # This attempt failed
+        print(f"❌ Attempt {attempt}: Failed to download Northbeam data")
+        
+        if attempt < NORTHBEAM_MAX_RETRIES:
+            print(f"⏳ Waiting {NORTHBEAM_RETRY_DELAY} seconds before retry...")
+            time.sleep(NORTHBEAM_RETRY_DELAY)  # Sleep between retries
+            print("🔄 Retrying...")
+        else:
+            print("❌ All attempts failed - giving up")
     
-    # Filter data
-    filtered_df = filter_attribution_data(df, ACCOUNTING_MODE_FILTER, NORTHBEAM_PLATFORM)
+    return None
+
+def fetch_all_data_concurrently(date_from=None, date_to=None, use_cached_files=True, use_meta=True, use_northbeam=True):
+    """
+    Fetch all required data concurrently and return comprehensive ad objects.
+    Process: Check existing data → Fetch missing data concurrently → Return data immediately
+    """
     
-    # Save filtered data
+    print(f"🚀 COMPREHENSIVE AD METRICS EXTRACTION (CONCURRENT)")
+    print("=" * 60)
+    
+    # Print configuration
+    print(f"\n🎯 CONFIGURATION:")
+    print(f"   - Date Range: {date_from} to {date_to}")
+    print(f"   - Data Sources: Meta: {'Yes' if use_meta else 'No'}, Northbeam: {'Yes' if use_northbeam else 'No'}")
+    
+    print(f"\n🔍 STEP 1: CHECKING EXISTING RAW DATA FILES...")
+    
+    # Safety check for date_from and date_to
+    if date_from is None or date_to is None:
+        raise ValueError("date_from and date_to must be provided")
+    
     date_from_formatted = format_date_for_filename(date_from)
     date_to_formatted = format_date_for_filename(date_to)
     
-    # Save to S3
-    s3_key = f"campaign-reporting/raw/northbeam/northbeam_{date_from_formatted}-{date_to_formatted}.csv"
-    csv_buffer = io.StringIO()
-    filtered_df.to_csv(csv_buffer, index=False)
-    try:
-        s3_client = get_s3_client()
-        s3_client.put_object(
-            Bucket=S3_BUCKET,
-            Key=s3_key,
-            Body=csv_buffer.getvalue(),
-            ContentType='text/csv'
-        )
-        print(f"✅ Saved Northbeam CSV to S3: s3://{S3_BUCKET}/{s3_key}")
-    except Exception as e:
-        print(f"❌ Failed to save Northbeam CSV to S3: {e}")
+    # Check for existing raw data files
+    meta_insights_file = f"{ROOT_DIRECTORY}/raw/meta_insights/meta_insights_{date_from_formatted}-{date_to_formatted}.json"
+    northbeam_file = f"{ROOT_DIRECTORY}/raw/northbeam/northbeam_{date_from_formatted}-{date_to_formatted}.csv"
     
-    # Save locally if enabled
-    if DOWNLOAD_REPORTS_LOCALLY:
-        csv_filename = f"campaign-reporting/raw/northbeam/northbeam_{date_from_formatted}-{date_to_formatted}.csv"
-        os.makedirs("campaign-reporting/raw/northbeam", exist_ok=True)
-        filtered_df.to_csv(csv_filename, index=False)
-        print(f"💾 Saved Northbeam CSV: {csv_filename}")
+    existing_files = {
+        'meta_insights': None,
+        'northbeam_data': None
+    }
+    
+    # Check which files exist (S3 first, then local fallback)
+    s3_meta_key = f"{ROOT_DIRECTORY}/raw/meta_insights/meta_insights_{date_from_formatted}-{date_to_formatted}.json"
+    s3_northbeam_key = f"{ROOT_DIRECTORY}/raw/northbeam/northbeam_{date_from_formatted}-{date_to_formatted}.csv"
+    
+    # Check for Meta insights file (S3 first, then local fallback)
+    if file_exists_in_s3(s3_meta_key):
+        try:
+            existing_files['meta_insights'] = load_json_from_s3(s3_meta_key)
+            if existing_files['meta_insights']:
+                print(f"✅ Found existing Meta insights in S3: {len(existing_files['meta_insights'])} ads")
+        except Exception as e:
+            print(f"⚠️ Error loading existing Meta insights from S3: {e}")
     else:
-        print(f"💾 Northbeam CSV saved to S3 only (local saving disabled)")
+        print(f"❌ Meta insights not found in S3")
     
-    return filtered_df
+    # Fallback to local Meta insights file (only if local saving is enabled)
+    if DOWNLOAD_REPORTS_LOCALLY and existing_files['meta_insights'] is None:
+        if os.path.exists(meta_insights_file):
+            try:
+                with open(meta_insights_file, 'r') as f:
+                    existing_files['meta_insights'] = json.load(f)
+                print(f"✅ Found existing Meta insights locally: {len(existing_files['meta_insights'])} ads")
+            except Exception as e:
+                print(f"⚠️ Error loading existing Meta insights: {e}")
+        else:
+            print(f"📁 Meta insights not found locally")
+    
+    # Check for Northbeam data file (S3 first, then local fallback)
+    if file_exists_in_s3(s3_northbeam_key):
+        try:
+            # Download CSV from S3 to temporary file
+            s3_client = get_s3_client()
+            response = s3_client.get_object(Bucket=S3_BUCKET, Key=s3_northbeam_key)
+            csv_content = response['Body'].read().decode('utf-8')
+            # Create a StringIO object to read CSV from memory
+            csv_buffer = io.StringIO(csv_content)
+            existing_files['northbeam_data'] = pd.read_csv(csv_buffer, dtype={
+                'ad_id': str,
+                'campaign_id': str,
+                'adset_id': str
+            })
+            print(f"✅ Found existing Northbeam data in S3: {len(existing_files['northbeam_data'])} rows")
+        except Exception as e:
+            print(f"⚠️ Error loading existing Northbeam data from S3: {e}")
+    else:
+        print(f"❌ Northbeam data not found in S3")
+    
+    # Fallback to local Northbeam data file (only if local saving is enabled)
+    if DOWNLOAD_REPORTS_LOCALLY and existing_files['northbeam_data'] is None:
+        print(f"🔍 Checking for local Northbeam data: {northbeam_file}")
+        if os.path.exists(northbeam_file):
+            try:
+                # Read CSV with specific dtype to ensure ID columns are treated as strings
+                existing_files['northbeam_data'] = pd.read_csv(northbeam_file, dtype={
+                    'ad_id': str,
+                    'campaign_id': str,
+                    'adset_id': str
+                })
+                print(f"✅ Found existing Northbeam data locally: {len(existing_files['northbeam_data'])} rows")
+            except Exception as e:
+                print(f"⚠️ Error loading existing Northbeam data: {e}")
+        else:
+            print(f"📁 Northbeam data not found locally")
+    
+    # Initialize with existing data
+    meta_insights = existing_files['meta_insights']
+    northbeam_df = existing_files['northbeam_data']
+    
+    print(f"\n⚡ STEP 2: FETCHING MISSING RAW DATA CONCURRENTLY...")
+    
+    # Check if we should use cached files only
+    if use_cached_files:
+        # Check if we have the required files for this date range based on selected sources
+        missing_files = []
+        if use_meta and meta_insights is None:
+            missing_files.append("Meta insights")
+        if use_northbeam and northbeam_df is None:
+            missing_files.append("Northbeam data")
+        
+        if not missing_files:
+            print("✅ All required cached files found - using existing data only")
+            return meta_insights, northbeam_df
+    
+    # Prepare concurrent fetching
+    import concurrent.futures
+    import threading
+    
+    # Shared variables for concurrent access
+    meta_insights_result = {'data': meta_insights, 'error': None}
+    northbeam_result = {'data': northbeam_df, 'error': None}
+    
+    def fetch_meta_concurrent():
+        """Fetch Meta insights in a separate thread"""
+        try:
+            if meta_insights is None:
+                print("📊 Fetching Meta insights concurrently...")
+                result = fetch_meta_insights(date_from, date_to)
+                meta_insights_result['data'] = result
+                print(f"✅ Meta insights fetched concurrently: {len(result) if result else 0} ads")
+            else:
+                print("📊 Meta insights already available")
+        except Exception as e:
+            print(f"❌ Error fetching Meta insights concurrently: {e}")
+            meta_insights_result['error'] = e
+    
+    def fetch_northbeam_concurrent():
+        """Fetch Northbeam data in a separate thread"""
+        try:
+            if northbeam_df is None:
+                print("📊 Fetching Northbeam data concurrently...")
+                result = fetch_northbeam_data(date_from, date_to)
+                northbeam_result['data'] = result
+                print(f"✅ Northbeam data fetched concurrently: {len(result) if result is not None else 0} rows")
+            else:
+                print("📊 Northbeam data already available")
+        except Exception as e:
+            print(f"❌ Error fetching Northbeam data concurrently: {e}")
+            northbeam_result['error'] = e
+    
+    # Start concurrent fetching only for selected sources
+    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
+        futures = []
+        if use_meta and meta_insights is None:
+            futures.append(executor.submit(fetch_meta_concurrent))
+        if use_northbeam and northbeam_df is None:
+            futures.append(executor.submit(fetch_northbeam_concurrent))
+        
+        # Wait for all futures to complete
+        if futures:
+            concurrent.futures.wait(futures)
+    
+    # Check for errors only for selected sources
+    if use_meta and meta_insights_result['error']:
+        print(f"❌ Meta insights fetch failed: {meta_insights_result['error']}")
+        if not use_northbeam:
+            return None, None  # Only return None if Meta was the only source
+    
+    if use_northbeam and northbeam_result['error']:
+        print(f"❌ Northbeam data fetch failed: {northbeam_result['error']}")
+        if not use_meta:
+            return None, None  # Only return None if Northbeam was the only source
+    
+    print(f"\n📊 FINAL DATA SUMMARY:")
+    if use_meta:
+        print(f"   - Meta insights: {len(meta_insights_result['data']) if meta_insights_result['data'] else 0} ads")
+    if use_northbeam:
+        print(f"   - Northbeam data: {len(northbeam_result['data']) if northbeam_result['data'] is not None else 0} rows")
+    
+    return meta_insights_result['data'], northbeam_result['data']
 
-def fetch_all_data_sequentially(date_from=None, date_to=None):
+def fetch_all_data_sequentially(date_from=None, date_to=None, use_cached_files=True):
     """
     Fetch all required data sequentially and return comprehensive ad objects.
     Process: Always fetch fresh data → Save to S3 → Merge into comprehensive objects → Save to S3
@@ -829,8 +1291,8 @@ def fetch_all_data_sequentially(date_from=None, date_to=None):
     date_to_formatted = format_date_for_filename(date_to)
     
     # Check for existing raw data files
-    meta_insights_file = f"campaign-reporting/raw/meta_insights/meta_insights_{date_from_formatted}-{date_to_formatted}.json"
-    northbeam_file = f"campaign-reporting/raw/northbeam/northbeam_{date_from_formatted}-{date_to_formatted}.csv"
+    meta_insights_file = f"{ROOT_DIRECTORY}/raw/meta_insights/meta_insights_{date_from_formatted}-{date_to_formatted}.json"
+    northbeam_file = f"{ROOT_DIRECTORY}/raw/northbeam/northbeam_{date_from_formatted}-{date_to_formatted}.csv"
     
     existing_files = {
         'meta_insights': None,
@@ -838,8 +1300,8 @@ def fetch_all_data_sequentially(date_from=None, date_to=None):
     }
     
     # Check which files exist (S3 first, then local fallback)
-    s3_meta_key = f"campaign-reporting/raw/meta_insights/meta_insights_{date_from_formatted}-{date_to_formatted}.json"
-    s3_northbeam_key = f"campaign-reporting/raw/northbeam/northbeam_{date_from_formatted}-{date_to_formatted}.csv"
+    s3_meta_key = f"{ROOT_DIRECTORY}/raw/meta_insights/meta_insights_{date_from_formatted}-{date_to_formatted}.json"
+    s3_northbeam_key = f"{ROOT_DIRECTORY}/raw/northbeam/northbeam_{date_from_formatted}-{date_to_formatted}.csv"
     
     # Check for Meta insights file (S3 first, then local fallback)
     # print(f"🔍 Checking for Meta insights: {s3_meta_key}")
@@ -911,7 +1373,7 @@ def fetch_all_data_sequentially(date_from=None, date_to=None):
     print(f"\n⚡ STEP 2: FETCHING MISSING RAW DATA SEQUENTIALLY...")
     
     # Check if we should use cached files only
-    if USE_CACHED_FILES:
+    if use_cached_files:
         
         # Check if we have the required files for this date range
         missing_files = []
@@ -959,11 +1421,16 @@ def fetch_all_data_sequentially(date_from=None, date_to=None):
 def merge_data(northbeam_data, meta_data, date_from=None, date_to=None):
     """Merge Northbeam and Meta data into comprehensive ad objects"""
     
-    # Convert northbeam_data DataFrame to list of dictionaries if needed
-    if isinstance(northbeam_data, pd.DataFrame):
-        northbeam_list = northbeam_data.to_dict('records')
+    # Handle empty or None Northbeam data gracefully
+    if northbeam_data is None or (isinstance(northbeam_data, pd.DataFrame) and len(northbeam_data) == 0):
+        print("⚠️ No Northbeam data available - creating Meta-only comprehensive ads")
+        northbeam_list = []
     else:
-        northbeam_list = northbeam_data
+        # Convert northbeam_data DataFrame to list of dictionaries if needed
+        if isinstance(northbeam_data, pd.DataFrame):
+            northbeam_list = northbeam_data.to_dict('records')
+        else:
+            northbeam_list = northbeam_data
     
     # Create lookup dictionaries
     northbeam_lookup = {}
@@ -1027,22 +1494,22 @@ def merge_data(northbeam_data, meta_data, date_from=None, date_to=None):
                     'accounting_mode': northbeam_item.get('accounting_mode', ''),
                     'attribution_model': northbeam_item.get('attribution_model', ''),
                     'attribution_window': northbeam_item.get('attribution_window', ''),
-                    'spend': safe_float_conversion(northbeam_item.get('spend')),
-                    'impressions': safe_float_conversion(northbeam_item.get('impressions')),
-                    'meta_link_clicks': safe_float_conversion(northbeam_item.get('meta_link_clicks')),
-                    'meta_3s_video_views': safe_float_conversion(northbeam_item.get('meta_3s_video_views')),
-                    'attributed_rev': safe_float_conversion(northbeam_item.get('attributed_rev')),
-                    'transactions': safe_float_conversion(northbeam_item.get('transactions')),
-                    'roas': safe_float_conversion(northbeam_item.get('roas'))
+                    'spend': safe_float_conversion(northbeam_item.get('spend', 0)),
+                    'impressions': safe_float_conversion(northbeam_item.get('impressions', 0)),
+                    'meta_link_clicks': safe_float_conversion(northbeam_item.get('meta_link_clicks', 0)),
+                    'meta_3s_video_views': safe_float_conversion(northbeam_item.get('meta_3s_video_views', 0)),
+                    'attributed_rev': safe_float_conversion(northbeam_item.get('attributed_rev', 0)),
+                    'transactions': safe_float_conversion(northbeam_item.get('transactions', 0)),
+                    'roas': safe_float_conversion(northbeam_item.get('roas', 0))
                 },
                 'meta': {
-                    'spend': safe_float_conversion(meta_item.get('spend')),
-                    'impressions': safe_float_conversion(meta_item.get('impressions')),
-                    'link_clicks': safe_float_conversion(meta_item.get('link_clicks')),
-                    'purchase_value': safe_float_conversion(meta_item.get('purchase_value')),
-                    'purchase_count': safe_float_conversion(meta_item.get('purchase_count')),
-                    'purchase_roas': safe_float_conversion(meta_item.get('purchase_roas')),
-                    'video_views_3s': safe_float_conversion(meta_item.get('video_views_3s'))
+                    'spend': safe_float_conversion(meta_item.get('spend', 0)),
+                    'impressions': safe_float_conversion(meta_item.get('impressions', 0)),
+                    'link_clicks': safe_float_conversion(meta_item.get('link_clicks', 0)),
+                    'purchase_value': safe_float_conversion(meta_item.get('purchase_value', 0)),
+                    'purchase_count': safe_float_conversion(meta_item.get('purchase_count', 0)),
+                    'purchase_roas': safe_float_conversion(meta_item.get('purchase_roas', 0)),
+                    'video_views_3s': safe_float_conversion(meta_item.get('video_views_3s', 0))
                 }
             }
         }
@@ -1433,882 +1900,10 @@ def get_available_filter_options(ad_objects):
 from googleapiclient.http import MediaFileUpload
 from googleapiclient.errors import HttpError
 
-# ===== META AD CREATIVES PROCESSOR =====
-
-class MetaAdCreativesProcessor:
-    """Clean and efficient processor for Meta ad creatives URLs"""
-    
-    def __init__(self, access_token: str, ad_account_id: str, page_id: str = None, graph_base: str = "https://graph.facebook.com/v23.0"):
-        self.access_token = access_token
-        self.ad_account_id = ad_account_id
-        self.page_id = page_id
-        self.graph_base = graph_base
-        self.batch_size = 50
-        
-    def get_filename(self, file_type: str, date_from: str = None, date_to: str = None) -> str:
-        """Generate standardized filenames"""
-        if file_type == "raw":
-            # Raw file is date-specific
-            date_from_clean = date_from.replace('-', '') if date_from else "temp"
-            date_to_clean = date_to.replace('-', '') if date_to else "temp"
-            return f"campaign-reporting/raw/meta_adcreatives/meta_adcreatives_{date_from_clean}-{date_to_clean}.json"
-        elif file_type == "processed":
-            # Processed file uses current date
-            return get_master_urls_filename()
-        else:
-            return f"campaign-reporting/raw/meta_adcreatives/meta_adcreatives_{file_type}.json"
-    
-    def load_processed_data(self, date_from: str = None, date_to: str = None) -> Dict:
-        """Load existing processed data - finds most recent master URLs file"""
-        # Try to find the most recent master URLs file
-        try:
-            # List all master URLs files in S3
-            s3_client = get_s3_client()
-            response = s3_client.list_objects_v2(
-                Bucket=S3_BUCKET,
-                Prefix="campaign-reporting/processed/master_urls/master_urls_",
-                MaxKeys=100
-            )
-            
-            if 'Contents' in response:
-                # Sort by date (newest first)
-                files = sorted(
-                    [obj['Key'] for obj in response['Contents'] if obj['Key'].endswith('.json')],
-                    reverse=True
-                )
-                
-                if files:
-                    # Load the most recent file
-                    most_recent_key = files[0]
-                    try:
-                        data = load_json_from_s3(most_recent_key)
-                        if data:
-                            # print(f"✅ Loaded most recent master URLs: {most_recent_key}")
-                            return data
-                    except Exception as e:
-                        print(f"⚠️ Error loading most recent master URLs from S3: {e}")
-            
-        except Exception as e:
-            print(f"⚠️ Error listing master URLs files in S3: {e}")
-        
-        # Fallback to local files
-        try:
-            local_dir = "campaign-reporting/processed/master_urls"
-            if os.path.exists(local_dir):
-                files = [f for f in os.listdir(local_dir) if f.startswith("master_urls_") and f.endswith(".json")]
-                if files:
-                    # Sort by date (newest first)
-                    files.sort(reverse=True)
-                    most_recent_file = os.path.join(local_dir, files[0])
-                    with open(most_recent_file, 'r') as f:
-                        data = json.load(f)
-                        print(f"✅ Loaded most recent master URLs locally: {most_recent_file}")
-                        return data
-        except Exception as e:
-            print(f"⚠️ Error loading local master URLs: {e}")
-        
-        return {}
-    
-    def save_processed_data(self, data: Dict, date_from: str = None, date_to: str = None):
-        """Save processed data"""
-        filename = self.get_filename("processed", date_from, date_to)
-        
-        # Save to S3
-        s3_key = filename
-        save_json_to_s3(data, s3_key)
-        
-        # Save locally if enabled
-        if DOWNLOAD_REPORTS_LOCALLY:
-            os.makedirs(os.path.dirname(filename), exist_ok=True)
-            with open(filename, 'w') as f:
-                json.dump(data, f, indent=2)
-        else:
-            print(f"💾 Master URLs saved to S3 only (local saving disabled)")
-        
-        # Clear the processed data cache to force reload of updated data
-        clear_processed_data_cache()
-        print("🔄 Cleared processed data cache to ensure fresh data on next access")
-    
-    def save_raw_data(self, data: Dict, date_from: str, date_to: str):
-        """Save raw adcreatives data"""
-        filename = self.get_filename("raw", date_from, date_to)
-        
-        # Save to S3
-        s3_key = filename
-        save_json_to_s3(data, s3_key)
-        
-        # Save locally if enabled
-        if DOWNLOAD_REPORTS_LOCALLY:
-            os.makedirs(os.path.dirname(filename), exist_ok=True)
-            with open(filename, 'w') as f:
-                json.dump(data, f, indent=2)
-        else:
-            print(f"💾 Meta ad creatives raw data saved to S3 only (local saving disabled)")
-    
-    def identify_missing_ads(self, ad_ids: List[str], processed_data: Dict) -> List[str]:
-        """Step 1: Identify ads missing media URLs or needing next priority attempt"""
-        missing_ads = []
-        
-        for ad_id in ad_ids:
-            ad_id_str = str(ad_id)
-            
-            # Check if ad exists in processed data
-            if ad_id_str not in processed_data:
-                missing_ads.append(ad_id_str)
-                continue
-            
-            ad_data = processed_data[ad_id_str]
-            
-            # Check if we have successfully obtained URLs
-            has_video_urls = bool(ad_data.get("video_source_url") or ad_data.get("video_permalink_url"))
-            has_image_urls = bool(ad_data.get("image_url") or ad_data.get("image_permalink_url"))
-            
-            # Check if we have priority tracking and haven't exhausted all attempts
-            current_priority = ad_data.get("priority", 0)
-            max_priority_attempts = ad_data.get("max_priority_attempts", 0)
-            
-            # Include ad if:
-            # 1. We haven't successfully obtained URLs yet, OR
-            # 2. We haven't exhausted all priority attempts yet
-            if not (has_video_urls or has_image_urls) or (max_priority_attempts > 0 and current_priority < max_priority_attempts - 1):
-                missing_ads.append(ad_id_str)
-            # If we've successfully obtained URLs or exhausted all attempts, skip this ad
-            # else:
-            #     if has_video_urls or has_image_urls:
-            #         print(f"✅ Ad {ad_id_str} already has media URLs")
-            #     else:
-            #         print(f"⚠️ Ad {ad_id_str} has exhausted all priority attempts ({max_priority_attempts} total)")
-        
-        return missing_ads
-    
-    def fetch_raw_adcreatives(self, ad_ids: List[str], date_from: str, date_to: str) -> Dict:
-        """Steps 2-3: Batch fetch raw adcreatives and save"""
-        print(f"🔄 Fetching raw adcreatives for {len(ad_ids)} ads...")
-        
-        raw_data = {}
-        headers = {'Authorization': f'Bearer {self.access_token}'}
-        
-        # Creative fields for comprehensive data extraction
-        fields = (
-            "thumbnail_url,"
-            "asset_feed_spec{ad_formats,images{hash,url,adlabels},videos{video_id,adlabels,thumbnail_url,thumbnail_hash},"
-            "asset_customization_rules},"
-            "object_story_spec{link_data{image_hash,picture,preferred_image_tags,preferred_video_tags},"
-            "template_data{child_attachments},video_data{video_id,image_url,image_hash},"
-            "photo_data{url,image_hash}}"
-        )
-        
-        # Process in batches
-        for i in range(0, len(ad_ids), self.batch_size):
-            batch_ads = ad_ids[i:i + self.batch_size]
-            
-            # Prepare batch requests
-            batch_requests = []
-            for ad_id in batch_ads:
-                batch_requests.append({
-                    "method": "GET",
-                    "relative_url": f"{ad_id}/adcreatives?fields={fields}"
-                })
-            
-            # Execute batch request
-            try:
-                response = requests.post(
-                    f"{self.graph_base}/",
-                    data={
-                        "access_token": self.access_token,
-                        "batch": json.dumps(batch_requests)
-                    },
-                    headers=headers,
-                    timeout=30
-                )
-                response.raise_for_status()
-                
-                batch_results = response.json()
-                
-                # Process results
-                for idx, result in enumerate(batch_results):
-                    if idx >= len(batch_ads):
-                        break
-                    
-                    ad_id = batch_ads[idx]
-                    
-                    if result.get("code") == 200:
-                        try:
-                            creative_data = json.loads(result["body"])
-                            raw_data[ad_id] = creative_data
-                        except json.JSONDecodeError as e:
-                            raw_data[ad_id] = {"error": f"JSON parse error: {e}"}
-                    else:
-                        raw_data[ad_id] = {"error": f"API error {result.get('code')}"}
-                
-            except Exception as e:
-                print(f"❌ Batch request failed: {e}")
-                for ad_id in batch_ads:
-                    if ad_id not in raw_data:
-                        raw_data[ad_id] = {"error": f"Request failed: {e}"}
-            
-            time.sleep(0.2)  # Rate limiting
-            print(f"📦 Processed {min(i + self.batch_size, len(ad_ids))}/{len(ad_ids)} ads")
-        
-        # Save raw data
-        self.save_raw_data(raw_data, date_from, date_to)
-        print(f"✅ Raw adcreatives saved")
-        
-        return raw_data
-    
-    def update_thumbnails_for_existing_ads(self, raw_data: Dict, processed_data: Dict) -> Dict:
-        """Update video_thumbnail_url for existing ads that have raw data available"""
-        print(f"🖼️ Updating thumbnails for existing ads with raw data...")
-        
-        updated_count = 0
-        for ad_id, creative_data in raw_data.items():
-            if "error" in creative_data or "data" not in creative_data:
-                continue
-            
-            if not creative_data["data"]:
-                continue
-            
-            # Only update if ad exists in processed data and has empty video_thumbnail_url
-            if ad_id in processed_data and not processed_data[ad_id].get("video_thumbnail_url"):
-                creative = creative_data["data"][0]
-                
-                # Extract video thumbnail from asset feed (priority 1)
-                asset_feed = creative.get("asset_feed_spec", {})
-                videos = asset_feed.get("videos", [])
-                if videos:
-                    # Get priority 1 video (lowest priority number)
-                    customization_rules = asset_feed.get("asset_customization_rules", [])
-                    priority_map = {}
-                    
-                    for rule in customization_rules:
-                        video_label = rule.get("video_label", {})
-                        if video_label.get("id") and rule.get("priority"):
-                            priority_map[video_label["id"]] = rule["priority"]
-                    
-                    # Find video with priority 1
-                    priority_1_video = None
-                    for video in videos:
-                        adlabels = video.get("adlabels", [])
-                        label_id = adlabels[0].get("id") if adlabels else None
-                        priority = priority_map.get(label_id, 999) if label_id else 999
-                        
-                        if priority == 1:
-                            priority_1_video = video
-                            break
-                    
-                    # If no priority 1 found, use first video
-                    if not priority_1_video and videos:
-                        priority_1_video = videos[0]
-                    
-                    if priority_1_video:
-                        video_thumbnail_url = priority_1_video.get("thumbnail_url", "")
-                        if video_thumbnail_url:
-                            processed_data[ad_id]["video_thumbnail_url"] = video_thumbnail_url
-                            updated_count += 1
-                            print(f"✅ Updated video_thumbnail_url for ad {ad_id}")
-        
-        print(f"🖼️ Updated thumbnails for {updated_count} existing ads")
-        return processed_data
-    
-    def add_thumbnails_to_processed(self, raw_data: Dict, processed_data: Dict, missing_ads: List[str]) -> Dict:
-        """Step 4: Add missing ads to processed data with thumbnails"""
-        print(f"🖼️ Adding thumbnails for {len(missing_ads)} ads...")
-        
-        for ad_id in missing_ads:
-            if ad_id in raw_data and "error" not in raw_data[ad_id]:
-                # Extract thumbnail from raw data
-                thumbnail_url = ""
-                video_thumbnail_url = ""
-                creative_data = raw_data[ad_id]
-                
-                if "data" in creative_data and creative_data["data"]:
-                    creative = creative_data["data"][0]
-                    thumbnail_url = creative.get("thumbnail_url", "")
-                    
-                    # Extract video thumbnail from asset feed (priority 1)
-                    asset_feed = creative.get("asset_feed_spec", {})
-                    videos = asset_feed.get("videos", [])
-                    if videos:
-                        # Get priority 1 video (lowest priority number)
-                        customization_rules = asset_feed.get("asset_customization_rules", [])
-                        priority_map = {}
-                        
-                        for rule in customization_rules:
-                            video_label = rule.get("video_label", {})
-                            if video_label.get("id") and rule.get("priority"):
-                                priority_map[video_label["id"]] = rule["priority"]
-                        
-                        # Find video with priority 1
-                        priority_1_video = None
-                        for video in videos:
-                            adlabels = video.get("adlabels", [])
-                            label_id = adlabels[0].get("id") if adlabels else None
-                            priority = priority_map.get(label_id, 999) if label_id else 999
-                            
-                            if priority == 1:
-                                priority_1_video = video
-                                break
-                        
-                        # If no priority 1 found, use first video
-                        if not priority_1_video and videos:
-                            priority_1_video = videos[0]
-                        
-                        if priority_1_video:
-                            video_thumbnail_url = priority_1_video.get("thumbnail_url", "")
-                
-                # Initialize processed entry
-                processed_data[ad_id] = {
-                    "ad_id": ad_id,
-                    "thumbnail_url": thumbnail_url,  # Basic thumbnail from ad creative
-                    "video_thumbnail_url": video_thumbnail_url,  # High-quality thumbnail from asset feed
-                    "video_source_url": "",
-                    "video_permalink_url": "",
-                    "image_url": "",
-                    "image_permalink_url": "",
-                    "video_id": "",
-                    "image_hash": "",
-                    "priority": 0,
-                    "max_priority_attempts": 0,  # Will be set when we extract assets
-                    "all_video_ids": [],  # Track all available video IDs
-                    "all_image_hashes": []  # Track all available image hashes
-                }
-        
-        return processed_data
-    
-    def extract_media_assets(self, asset_feed: Dict, object_story: Dict) -> List[Tuple[str, str, float, str]]:
-        """Extract and prioritize media assets from creative data"""
-        assets = []
-        
-        # 1. Asset feed videos (with priority)
-        videos = asset_feed.get("videos", [])
-        if videos:
-            customization_rules = asset_feed.get("asset_customization_rules", [])
-            priority_map = {}
-            
-            for rule in customization_rules:
-                video_label = rule.get("video_label", {})
-                if video_label.get("id") and rule.get("priority"):
-                    priority_map[video_label["id"]] = rule["priority"]
-            
-            for idx, video in enumerate(videos):
-                video_id = video.get("video_id")
-                if video_id:
-                    adlabels = video.get("adlabels", [])
-                    label_id = adlabels[0].get("id") if adlabels else None
-                    priority = priority_map.get(label_id, 999) if label_id else 999
-                    assets.append(("video", video_id, priority, f"asset_feed_{idx}"))
-        
-        # 2. Asset feed images (with priority)
-        images = asset_feed.get("images", [])
-        if images:
-            customization_rules = asset_feed.get("asset_customization_rules", [])
-            priority_map = {}
-            
-            for rule in customization_rules:
-                image_label = rule.get("image_label", {})
-                if image_label.get("id") and rule.get("priority"):
-                    priority_map[image_label["id"]] = rule["priority"]
-            
-            for idx, image in enumerate(images):
-                image_hash = image.get("hash")
-                if image_hash:
-                    adlabels = image.get("adlabels", [])
-                    label_id = adlabels[0].get("id") if adlabels else None
-                    priority = priority_map.get(label_id, 999) if label_id else 999
-                    assets.append(("image", image_hash, priority, f"asset_feed_{idx}"))
-        
-        # 3. Object story assets (lower priority)
-        video_data = object_story.get("video_data", {})
-        if video_data.get("video_id"):
-            assets.append(("video", video_data["video_id"], 1000, "object_story_video"))
-        
-        photo_data = object_story.get("photo_data", {})
-        if photo_data.get("image_hash"):
-            assets.append(("image", photo_data["image_hash"], 1000, "object_story_photo"))
-        
-        link_data = object_story.get("link_data", {})
-        if link_data.get("image_hash"):
-            assets.append(("image", link_data["image_hash"], 1000, "object_story_link"))
-        
-        # Sort by priority (lower number = higher priority)
-        assets.sort(key=lambda x: x[2])
-        
-        # Remove duplicates while preserving order
-        seen = set()
-        unique_assets = []
-        for asset in assets:
-            if asset[1] not in seen:
-                seen.add(asset[1])
-                unique_assets.append(asset)
-        
-        return unique_assets
-    
-    def get_page_token(self) -> Optional[str]:
-        """Get page access token for enhanced permissions"""
-        if not self.page_id:
-            return None
-        
-        try:
-            url = f"{self.graph_base}/{self.page_id}?fields=access_token"
-            headers = {'Authorization': f'Bearer {self.access_token}'}
-            response = requests.get(url, headers=headers, timeout=10)
-            response.raise_for_status()
-            data = response.json()
-            return data.get("access_token")
-        except Exception as e:
-            print(f"❌ Failed to get page token: {e}")
-            return None
-    
-    def batch_fetch_video_urls(self, video_ids: List[str]) -> Dict[str, Dict]:
-        """Batch fetch video URLs with thumbnails"""
-        if not video_ids:
-            return {}
-        
-        print(f"🎬 Fetching URLs for {len(video_ids)} videos...")
-        
-        video_urls = {}
-        tokens = [("system", self.access_token)]
-        
-        # Add page token if available
-        page_token = self.get_page_token()
-        if page_token:
-            tokens.insert(0, ("page", page_token))
-        
-        # Try tokens in order (page first, then system)
-        for token_name, token in tokens:
-            if len(video_urls) >= len(video_ids):
-                break
-            
-            remaining_videos = [vid for vid in video_ids if vid not in video_urls]
-            if not remaining_videos:
-                break
-            
-            # Process in batches
-            for i in range(0, len(remaining_videos), self.batch_size):
-                batch_videos = remaining_videos[i:i + self.batch_size]
-                
-                batch_requests = []
-                for video_id in batch_videos:
-                    batch_requests.append({
-                        "method": "GET",
-                        "relative_url": f"{video_id}?fields=id,permalink_url,source,thumbnails"
-                    })
-                
-                try:
-                    response = requests.post(
-                        f"{self.graph_base}/",
-                        data={
-                            "access_token": token,
-                            "batch": json.dumps(batch_requests)
-                        },
-                        headers={'Authorization': f'Bearer {token}'},
-                        timeout=30
-                    )
-                    response.raise_for_status()
-                    
-                    batch_results = response.json()
-                    
-                    for idx, result in enumerate(batch_results):
-                        if idx >= len(batch_videos):
-                            break
-                        
-                        video_id = batch_videos[idx]
-                        
-                        if result.get("code") == 200:
-                            try:
-                                video_data = json.loads(result["body"])
-                                
-                                # Extract thumbnail
-                                thumbnail_url = ""
-                                thumbnails = video_data.get("thumbnails", {}).get("data", [])
-                                if thumbnails:
-                                    preferred = next((t for t in thumbnails if t.get("is_preferred")), None)
-                                    thumbnail_url = (preferred or thumbnails[0]).get("uri", "")
-                                
-                                # Ensure permalink URL has full Facebook domain
-                                permalink_url = video_data.get("permalink_url", "")
-                                if permalink_url and permalink_url.startswith('/'):
-                                    permalink_url = f"https://www.facebook.com{permalink_url}"
-                                
-                                video_urls[video_id] = {
-                                    "source": video_data.get("source", ""),
-                                    "permalink": permalink_url,
-                                    "thumbnail": thumbnail_url
-                                }
-                                # print(f"🔍 Video {video_id}: source={bool(video_data.get('source'))}, permalink={bool(permalink_url)}")
-                            except json.JSONDecodeError:
-                                continue
-                
-                except Exception as e:
-                    print(f"❌ Video batch failed with {token_name}: {e}")
-                    continue
-                
-                time.sleep(0.2)
-        
-        print(f"✅ Retrieved {len(video_urls)} video URLs")
-        return video_urls
-    
-    def batch_fetch_image_urls(self, image_hashes: List[str]) -> Dict[str, Dict]:
-        """Batch fetch image URLs"""
-        if not image_hashes:
-            return {}
-        
-        print(f"🖼️ Fetching URLs for {len(image_hashes)} images...")
-        
-        image_urls = {}
-        
-        # Process in batches using adimages endpoint
-        for i in range(0, len(image_hashes), self.batch_size):
-            batch_hashes = image_hashes[i:i + self.batch_size]
-            
-            try:
-                url = f"{self.graph_base}/act_{self.ad_account_id}/adimages"
-                params = {
-                    'hashes': json.dumps(batch_hashes),
-                    'fields': 'url,permalink_url',
-                    'access_token': self.access_token
-                }
-                
-                response = requests.get(url, params=params, timeout=30)
-                response.raise_for_status()
-                
-                data = response.json()
-                for img in data.get("data", []):
-                    # Extract hash from id (format: "account_id:hash")
-                    img_id = img.get("id", "")
-                    if ":" in img_id:
-                        hash_part = img_id.split(":")[1]
-                        # Ensure permalink URL has full Facebook domain
-                        permalink_url = img.get("permalink_url", "")
-                        if permalink_url and permalink_url.startswith('/'):
-                            permalink_url = f"https://www.facebook.com{permalink_url}"
-                        
-                        image_urls[hash_part] = {
-                            "url": img.get("url", ""),
-                            "permalink": permalink_url
-                        }
-                        # print(f"🔍 Image {hash_part}: url={img.get('url')}, permalink={permalink_url}")
-                
-            except Exception as e:
-                print(f"❌ Image batch failed: {e}")
-                continue
-            
-            time.sleep(0.2)
-        
-        print(f"✅ Retrieved {len(image_urls)} image URLs")
-        return image_urls
-    
-    def process_media_urls(self, raw_data: Dict, processed_data: Dict, ad_types: Dict) -> Dict:
-        """Steps 5-6: Process raw data to get media URLs by ad type"""
-        print(f"🔄 Processing media URLs by ad type...")
-        
-        # Group ads by type and extract prioritized assets
-        # All ads will be processed as "mixed" (like carousel) to handle both video and image assets
-        mixed_ads = {}
-        
-        # Process ads from raw_data (new ads)
-        for ad_id, creative_data in raw_data.items():
-            if "error" in creative_data or "data" not in creative_data:
-                continue
-            
-            if not creative_data["data"]:
-                continue
-            
-            creative = creative_data["data"][0]
-            asset_feed = creative.get("asset_feed_spec", {})
-            object_story = creative.get("object_story_spec", {})
-            
-            # Extract prioritized assets
-            assets = self.extract_media_assets(asset_feed, object_story)
-            if not assets:
-                continue
-            
-            # Store all available assets in processed data for future retries
-            if ad_id in processed_data:
-                video_assets = [a for a in assets if a[0] == "video"]
-                image_assets = [a for a in assets if a[0] == "image"]
-                
-                processed_data[ad_id]["all_video_ids"] = [a[1] for a in video_assets]
-                processed_data[ad_id]["all_image_hashes"] = [a[1] for a in image_assets]
-                processed_data[ad_id]["max_priority_attempts"] = len(assets)
-            
-            # All ads are processed as mixed (like carousel) to handle both video and image assets
-            mixed_ads[ad_id] = {
-                "assets": assets,
-                "ad_type": ad_types.get(ad_id, "").lower()
-            }
-        
-        # Process existing ads that need URL processing (not in raw_data)
-        existing_ads_processed = 0
-        for ad_id, ad_data in processed_data.items():
-            # Skip if we already processed this ad from raw_data
-            if ad_id in raw_data:
-                continue
-            
-            # Check if this ad needs URL processing
-            has_video_urls = bool(ad_data.get("video_source_url") or ad_data.get("video_permalink_url"))
-            has_image_urls = bool(ad_data.get("image_url") or ad_data.get("image_permalink_url"))
-            current_priority = ad_data.get("priority", 0)
-            max_priority_attempts = ad_data.get("max_priority_attempts", 0)
-            
-            # Skip if we have URLs or exhausted attempts
-            if (has_video_urls or has_image_urls) or (max_priority_attempts > 0 and current_priority >= max_priority_attempts - 1):
-                continue
-            
-            # Create assets from stored video_ids and image_hashes
-            all_video_ids = ad_data.get("all_video_ids", [])
-            all_image_hashes = ad_data.get("all_image_hashes", [])
-            
-            assets = []
-            for video_id in all_video_ids:
-                assets.append(("video", video_id, 999, f"stored_video_{video_id}"))
-            for image_hash in all_image_hashes:
-                assets.append(("image", image_hash, 999, f"stored_image_{image_hash}"))
-            
-            if not assets:
-                continue
-            
-            existing_ads_processed += 1
-            
-            # All existing ads are processed as mixed (like carousel)
-            mixed_ads[ad_id] = {
-                "assets": assets,
-                "ad_type": ad_types.get(ad_id, "").lower()
-            }
-        
-        print(f"📊 Processed {existing_ads_processed} existing ads for URL fetching")
-        
-        # Process all ads as mixed (like carousel) to handle both video and image assets
-        if mixed_ads:
-            video_ids = []
-            image_hashes = []
-            video_to_ads = {}
-            hash_to_ads = {}
-            
-            for ad_id, ad_info in mixed_ads.items():
-                assets = ad_info["assets"]
-                ad_type = ad_info["ad_type"]
-                
-                # Get current priority attempt
-                current_priority = processed_data[ad_id].get("priority", 0)
-                
-                # Find video and image assets at current priority
-                video_assets = [a for a in assets if a[0] == "video"]
-                image_assets = [a for a in assets if a[0] == "image"]
-                
-                # Try video at current priority
-                if video_assets and current_priority < len(video_assets):
-                    video_id = video_assets[current_priority][1]
-                    video_ids.append(video_id)
-                    video_to_ads[video_id] = ad_id
-                    processed_data[ad_id]["video_id"] = video_id
-                
-                # Try image at current priority
-                if image_assets and current_priority < len(image_assets):
-                    image_hash = image_assets[current_priority][1]
-                    image_hashes.append(image_hash)
-                    hash_to_ads[image_hash] = ad_id
-                    processed_data[ad_id]["image_hash"] = image_hash
-                
-                # If no assets at current priority, increment for next attempt
-                if (not video_assets or current_priority >= len(video_assets)) and (not image_assets or current_priority >= len(image_assets)):
-                    print(f"⚠️ Ad {ad_id}: No more assets to try (current priority: {current_priority})")
-            
-            # Track which ads had failed attempts to avoid double incrementing
-            failed_ads = set()
-            
-            # Fetch video URLs
-            if video_ids:
-                video_urls = self.batch_fetch_video_urls(video_ids)
-                print(f"🔍 DEBUG: Retrieved {len(video_urls)} video URLs out of {len(video_ids)} requested")
-                
-                for video_id, urls in video_urls.items():
-                    if video_id in video_to_ads:
-                        ad_id = video_to_ads[video_id]
-                        current_priority = processed_data[ad_id].get("priority", 0)
-                        ad_type = mixed_ads[ad_id]["ad_type"]
-                        
-                        # Only update if URLs are missing or different
-                        if not processed_data[ad_id].get("video_source_url") or processed_data[ad_id]["video_source_url"] != urls.get("source", ""):
-                            processed_data[ad_id]["video_source_url"] = urls.get("source", "")
-                        if not processed_data[ad_id].get("video_permalink_url") or processed_data[ad_id]["video_permalink_url"] != urls.get("permalink", ""):
-                            processed_data[ad_id]["video_permalink_url"] = urls.get("permalink", "")
-                        # Store high-quality video thumbnail
-                        if urls.get("thumbnail"):
-                            processed_data[ad_id]["video_thumbnail_url"] = urls["thumbnail"]
-                        
-                        # Check if we got URLs - if not, increment priority for next attempt
-                        source_url = urls.get("source", "")
-                        permalink_url = urls.get("permalink", "")
-                        
-                        if not source_url and not permalink_url:
-                            failed_ads.add(ad_id)
-
-                # Handle failed video URL fetches (when video_urls is empty)
-                if not video_urls and video_ids:
-                    print(f"🚨 All video URL fetches failed for {len(video_ids)} videos - marking ads as failed")
-                    for video_id in video_ids:
-                        if video_id in video_to_ads:
-                            ad_id = video_to_ads[video_id]
-                            failed_ads.add(ad_id)
-                            # print(f"🚨 Ad {ad_id} video priority failed (URL fetch failed)")
-            
-            # Fetch image URLs
-            if image_hashes:
-                image_urls = self.batch_fetch_image_urls(image_hashes)
-                print(f"🔍 DEBUG: Retrieved {len(image_urls)} image URLs out of {len(image_hashes)} requested")
-                
-                for image_hash, urls in image_urls.items():
-                    if image_hash in hash_to_ads:
-                        ad_id = hash_to_ads[image_hash]
-                        current_priority = processed_data[ad_id].get("priority", 0)
-                        ad_type = mixed_ads[ad_id]["ad_type"]
-                        
-                        # Only update if URLs are missing or different
-                        if not processed_data[ad_id].get("image_url") or processed_data[ad_id]["image_url"] != urls.get("url", ""):
-                            processed_data[ad_id]["image_url"] = urls.get("url", "")
-                        if not processed_data[ad_id].get("image_permalink_url") or processed_data[ad_id]["image_permalink_url"] != urls.get("permalink", ""):
-                            processed_data[ad_id]["image_permalink_url"] = urls.get("permalink", "")
-                        
-                        # Check if we got URLs - if not, mark as failed
-                        image_url = urls.get("url", "")
-                        permalink_url = urls.get("permalink", "")
-                        # print(f"🔍 DEBUG: Ad {ad_id} image URLs - url: '{image_url}', permalink: '{permalink_url}'")
-                        
-                        if not image_url and not permalink_url:
-                            failed_ads.add(ad_id)
-                            
-                # Handle failed image URL fetches (when image_urls is empty)
-                if not image_urls and image_hashes:
-                    print(f"🚨 All image URL fetches failed for {len(image_hashes)} images - marking ads as failed")
-                    for image_hash in image_hashes:
-                        if image_hash in hash_to_ads:
-                            ad_id = hash_to_ads[image_hash]
-                            failed_ads.add(ad_id)
-                            # print(f"🚨 Ad {ad_id} image priority failed (URL fetch failed)")
-            
-            # Increment priority for all failed ads (only once per ad)
-            for ad_id in failed_ads:
-                current_priority = processed_data[ad_id].get("priority", 0)
-                processed_data[ad_id]["priority"] = current_priority + 1
-                # print(f"🚨 PRIORITY INCREMENT: Ad {ad_id} priority {current_priority} -> {current_priority + 1}")
-                    
-                    
-        
-                # All ads are now processed as mixed (like carousel) - no separate image/carousel processing needed
-                        
-        
-        print(f"✅ Media URL processing completed")
-        return processed_data
-    
-    def process_ads(self, ad_ids: List[str], ad_types: Dict[str, str], date_from: str, date_to: str) -> Dict:
-        """Main processing function following the 6-step process"""
-        
-        # Step 1: Load existing processed data
-        processed_data = self.load_processed_data()  # No date parameters for evolving document
-        
-        # Identify ads that need raw creative fetching
-        # Include new ads and existing ads that have empty video_thumbnail_url
-        ads_for_raw_fetch = []
-        for ad_id in ad_ids:
-            ad_id_str = str(ad_id)
-            if ad_id_str not in processed_data:
-                # New ad - needs raw data
-                ads_for_raw_fetch.append(ad_id_str)
-            elif not processed_data[ad_id_str].get("video_thumbnail_url"):
-                # Existing ad with empty video_thumbnail_url - needs raw data to update thumbnail
-                ads_for_raw_fetch.append(ad_id_str)
-        
-        print(f"📊 Found {len(ads_for_raw_fetch)} ads needing raw creative fetching")
-        
-        # Steps 2-3: Fetch raw adcreatives for new ads only (temporary file)
-        raw_data = {}
-        if ads_for_raw_fetch:
-            raw_data = self.fetch_raw_adcreatives(ads_for_raw_fetch, date_from, date_to)
-            
-            # Step 4: Add thumbnails to processed data for new ads
-            processed_data = self.add_thumbnails_to_processed(raw_data, processed_data, ads_for_raw_fetch)
-        
-        # Step 4b: Update thumbnails for existing ads that have raw data available
-        # This handles cases where existing ads in master_urls don't have video_thumbnail_url
-        if raw_data:
-            processed_data = self.update_thumbnails_for_existing_ads(raw_data, processed_data)
-        
-        
-        # Steps 5-6: Process media URLs by ad type (for ALL ads that need URL processing)
-        # This includes both new ads and existing ads that need to try next priority
-        ads_needing_urls = []
-        
-                # Add ads from current report that need URL processing
-        current_ad_ids = set(str(ad_id) for ad_id in ad_ids)
-        
-        for ad_id_str, ad_data in processed_data.items():
-            # Only process ads that are in the current report
-            if ad_id_str not in current_ad_ids:
-                continue
-                
-            has_video_urls = bool(ad_data.get("video_source_url") or ad_data.get("video_permalink_url"))
-            has_image_urls = bool(ad_data.get("image_url") or ad_data.get("image_permalink_url"))
-            current_priority = ad_data.get("priority", 0)
-            max_priority_attempts = ad_data.get("max_priority_attempts", 0)
-            
-            # Include if we don't have URLs yet or haven't exhausted attempts
-            if not (has_video_urls or has_image_urls) or (max_priority_attempts > 0 and current_priority < max_priority_attempts - 1):
-                ads_needing_urls.append(ad_id_str)
-                
-        if ads_needing_urls:
-            processed_data = self.process_media_urls(raw_data, processed_data, ad_types)
-        
-        # Save final processed data (evolving document)
-        self.save_processed_data(processed_data)
-        
-        # Debug: Check if any priorities were updated
-        priority_updates = 0
-        for ad_id, ad_data in processed_data.items():
-            if ad_data.get("priority", 0) > 0:
-                priority_updates += 1
-        
-        if priority_updates > 0:
-            print(f"💾 Saved {priority_updates} ads with priority > 0 to master_urls")
-        else:
-            print(f"💾 Saved master_urls (all priorities are 0)")
-        
-        # Summary
-        total_with_media = sum(1 for ad in processed_data.values() 
-                              if ad.get("video_source_url") or ad.get("video_permalink_url") or 
-                                 ad.get("image_url") or ad.get("image_permalink_url"))
-        
-        print(f"✅ Processing complete: {total_with_media}/{len(processed_data)} ads have media URLs")
-        
-        return processed_data
+# MetaAdCreativesProcessor class has been replaced with preview URLs functionality
 
 
-# Usage function
-def process_meta_ad_urls(ad_ids: List[str], ad_types: Dict[str, str], 
-                        access_token: str, ad_account_id: str, 
-                        date_from: str, date_to: str, page_id: str = None) -> Dict:
-    """
-    Main function to process Meta ad URLs
-    
-    Args:
-        ad_ids: List of ad IDs to process
-        ad_types: Dictionary mapping ad_id -> ad_type (e.g., "video", "static", "carousel")
-        access_token: Meta system user access token
-        ad_account_id: Meta ad account ID
-        date_from: Start date (YYYY-MM-DD)
-        date_to: End date (YYYY-MM-DD)
-        page_id: Optional page ID for enhanced permissions
-    
-    Returns:
-        Dictionary with processed ad data including URLs
-    """
-    processor = MetaAdCreativesProcessor(
-        access_token=access_token,
-        ad_account_id=ad_account_id,
-        page_id=page_id
-    )
-    
-    return processor.process_ads(ad_ids, ad_types, date_from, date_to)
+
 
 # ===== GOOGLE API CONFIGURATION =====
 GOOGLE_CREDENTIALS_FILE = os.getenv('GOOGLE_CREDENTIALS_FILE', 'credentials/creative-audit-tool-aaa3858bf2cb.json')
@@ -2317,8 +1912,8 @@ SCOPES = ['https://www.googleapis.com/auth/drive']
 GENERATE_GOOGLE_DOC = True  # Set to True to generate Google Doc from web display
 
 # Default configuration values - these will be overridden by frontend inputs
-DEFAULT_DATE_FROM = (date.today() - timedelta(days=1)).strftime("%Y-%m-%d")
-DEFAULT_DATE_TO = (date.today() - timedelta(days=1)).strftime("%Y-%m-%d")
+DEFAULT_DATE_FROM = date.today() - timedelta(days=7)  # 7 days before today
+DEFAULT_DATE_TO = date.today() - timedelta(days=1)    # yesterday
 DEFAULT_TOP_N = 5
 DEFAULT_CORE_PRODUCTS = [["LLEM", "Mascara"], ["BEB"], ["IWEL"], ["BrowGel"], ["LipTint"]]
 
@@ -2825,17 +2420,16 @@ def display_summary_tab(ad_objects, top_n=DEFAULT_TOP_N):
     """Display the summary tab with overall metrics and top N tables"""
     st.header("📊 Campaign Summary")
     
-    use_northbeam = getattr(main, 'USE_NORTHBEAM_DATA', True)
-    
-    # Overall metrics - use the correct data source based on USE_NORTHBEAM_DATA setting
-    data_source = 'northbeam' if use_northbeam else 'meta'
+    # Use the currently selected view source from session state
+    current_view_source = st.session_state.get('current_view_source', 'Meta')
+    data_source = 'northbeam' if current_view_source == 'Northbeam' else 'meta'
     overall_metrics = calculate_campaign_metrics(ad_objects, data_source=data_source)
     
     # Display metrics in a grid
     col1, col2, col3, col4 = st.columns(4)
     
     with col1:
-        create_metric_card("Total Ads", overall_metrics['total_ads'])
+        create_metric_card("Total Ads With Delivery", overall_metrics['total_ads'])
         create_metric_card("Total Spend", overall_metrics['total_spend'], format_currency)
     
     with col2:
@@ -2878,8 +2472,8 @@ def display_summary_tab(ad_objects, top_n=DEFAULT_TOP_N):
         primary_url, thumbnail_url = get_ad_url(ad_id, ad_type) if ad_id else ("", "")
         
         ads_data.append({
+            'Thumbnail': get_thumbnail_url_from_cache(ad_id),
             'Link': primary_url,  # Will be empty if not found in processed file
-            'Thumbnail': thumbnail_url,  # Hidden fallback column
             'Ad Type': ad['metadata'].get('ad_type', 'Unknown'),
             'Ad Name': ad['ad_ids']['ad_name'],
             'Merged': ad.get('merged_count', 1),  # Show how many ads were merged
@@ -2911,36 +2505,19 @@ def display_summary_tab(ad_objects, top_n=DEFAULT_TOP_N):
     display_columns = [col for col in top_ads_df.columns if col != 'Link Type']
     top_ads_df = top_ads_df[display_columns]
     
-    # Create display dataframe with fallback logic
+    # Create display dataframe with thumbnail column
     display_df = top_ads_df.copy()
-    
-    # Use thumbnail as fallback when Link is empty
-    for idx, row in display_df.iterrows():
-        if not row['Link'] and row['Thumbnail']:
-            display_df.at[idx, 'Link'] = row['Thumbnail']
-    
-    # Remove Thumbnail column from display
-    display_df = display_df[[col for col in display_df.columns if col != 'Thumbnail']]
-    
-    # Format numerical columns for better readability
-    display_df['Spend'] = display_df['Spend'].apply(format_currency)
-    display_df['Revenue'] = display_df['Revenue'].apply(format_currency)
-    display_df['ROAS'] = display_df['ROAS'].apply(format_roas)
-    display_df['CTR'] = display_df['CTR'].apply(format_percentage)
-    display_df['CPM'] = display_df['CPM'].apply(format_currency)
-    display_df['Thumbstop'] = display_df['Thumbstop'].apply(format_percentage)
-    display_df['AOV'] = display_df['AOV'].apply(format_currency)
-    display_df['Impressions'] = display_df['Impressions'].apply(lambda x: f"{x:,.0f}")
-    display_df['Link Clicks'] = display_df['Link Clicks'].apply(lambda x: f"{x:,.0f}")
-    display_df['Video Views'] = display_df['Video Views'].apply(lambda x: f"{x:,.0f}")
-    display_df['Transactions'] = display_df['Transactions'].apply(lambda x: f"{x:,.0f}")
     
     st.dataframe(
         display_df,
         column_config={
+            "Thumbnail": st.column_config.ImageColumn(
+                "Thumbnail",
+                width="small"
+            ),
             "Link": st.column_config.LinkColumn(
                 "Link",
-                help="Click to view ad",
+                help="Click to view ad preview",
                 display_text="🔗"
             )
         },
@@ -2950,36 +2527,19 @@ def display_summary_tab(ad_objects, top_n=DEFAULT_TOP_N):
     
     # Show all ads in expander
     with st.expander(f"📊 Show all {len(ads_df)} ads"):
-        # Create display dataframe with fallback logic
+        # Create display dataframe with thumbnail column
         display_ads_df = ads_df.copy()
-        
-        # Use thumbnail as fallback when Link is empty
-        for idx, row in display_ads_df.iterrows():
-            if not row['Link'] and row['Thumbnail']:
-                display_ads_df.at[idx, 'Link'] = row['Thumbnail']
-        
-        # Remove Thumbnail column from display
-        display_ads_df = display_ads_df[[col for col in display_ads_df.columns if col != 'Thumbnail']]
-        
-        # Format numerical columns for better readability
-        display_ads_df['Spend'] = display_ads_df['Spend'].apply(format_currency)
-        display_ads_df['Revenue'] = display_ads_df['Revenue'].apply(format_currency)
-        display_ads_df['ROAS'] = display_ads_df['ROAS'].apply(format_roas)
-        display_ads_df['CTR'] = display_ads_df['CTR'].apply(format_percentage)
-        display_ads_df['CPM'] = display_ads_df['CPM'].apply(format_currency)
-        display_ads_df['Thumbstop'] = display_ads_df['Thumbstop'].apply(format_percentage)
-        display_ads_df['AOV'] = display_ads_df['AOV'].apply(format_currency)
-        display_ads_df['Impressions'] = display_ads_df['Impressions'].apply(lambda x: f"{x:,.0f}")
-        display_ads_df['Link Clicks'] = display_ads_df['Link Clicks'].apply(lambda x: f"{x:,.0f}")
-        display_ads_df['Video Views'] = display_ads_df['Video Views'].apply(lambda x: f"{x:,.0f}")
-        display_ads_df['Transactions'] = display_ads_df['Transactions'].apply(lambda x: f"{x:,.0f}")
         
         st.dataframe(
             display_ads_df,
             column_config={
+                "Thumbnail": st.column_config.ImageColumn(
+                    "Thumbnail",
+                    width="small"
+                ),
                 "Link": st.column_config.LinkColumn(
                     "Link",
-                    help="Click to view ad",
+                    help="Click to view ad preview",
                     display_text="🔗"
                 )
             },
@@ -2998,64 +2558,56 @@ def display_summary_tab(ad_objects, top_n=DEFAULT_TOP_N):
         top_products_df = products_df.head(top_n)
         # Capitalize the product column name
         top_products_df_display = top_products_df.reset_index()
-        top_products_df_display.columns = ['Product'] + list(top_products_df_display.columns[1:])
         
-        # Format numerical columns for better readability (only if they exist)
-        if 'Spend' in top_products_df_display.columns:
-            top_products_df_display['Spend'] = top_products_df_display['Spend'].apply(format_currency)
-        if 'Revenue' in top_products_df_display.columns:
-            top_products_df_display['Revenue'] = top_products_df_display['Revenue'].apply(format_currency)
-        if 'ROAS' in top_products_df_display.columns:
-            top_products_df_display['ROAS'] = top_products_df_display['ROAS'].apply(format_roas)
-        if 'CTR' in top_products_df_display.columns:
-            top_products_df_display['CTR'] = top_products_df_display['CTR'].apply(format_percentage)
-        if 'CPM' in top_products_df_display.columns:
-            top_products_df_display['CPM'] = top_products_df_display['CPM'].apply(format_currency)
-        if 'Thumbstop' in top_products_df_display.columns:
-            top_products_df_display['Thumbstop'] = top_products_df_display['Thumbstop'].apply(format_percentage)
-        if 'AOV' in top_products_df_display.columns:
-            top_products_df_display['AOV'] = top_products_df_display['AOV'].apply(format_currency)
-        if 'Impressions' in top_products_df_display.columns:
-            top_products_df_display['Impressions'] = top_products_df_display['Impressions'].apply(lambda x: f"{x:,.0f}")
-        if 'Link Clicks' in top_products_df_display.columns:
-            top_products_df_display['Link Clicks'] = top_products_df_display['Link Clicks'].apply(lambda x: f"{x:,.0f}")
-        if 'Video Views' in top_products_df_display.columns:
-            top_products_df_display['Video Views'] = top_products_df_display['Video Views'].apply(lambda x: f"{x:,.0f}")
-        if 'Transactions' in top_products_df_display.columns:
-            top_products_df_display['Transactions'] = top_products_df_display['Transactions'].apply(lambda x: f"{x:,.0f}")
+        # Add thumbnail column for each product first
+        # After reset_index(), the first column is the group_by_field (product)
+        first_column_name = top_products_df_display.columns[0]
+        top_products_df_display['Thumbnail'] = top_products_df_display[first_column_name].apply(
+            lambda product: get_top_spending_ad_thumbnail(ad_objects, 'product', product)
+        )
         
-        st.dataframe(top_products_df_display, use_container_width=True, hide_index=True)
+        # Now reorder columns to put Thumbnail first
+        columns = ['Thumbnail'] + [col for col in top_products_df_display.columns if col != 'Thumbnail']
+        top_products_df_display = top_products_df_display[columns]
+        
+        st.dataframe(
+            top_products_df_display,
+            column_config={
+                "Thumbnail": st.column_config.ImageColumn(
+                    "Thumbnail",
+                    width="small"
+                )
+            },
+            use_container_width=True,
+            hide_index=True
+                )
         
         # Show all products in expander
         with st.expander(f"📦 Show all {len(products_df)} products"):
             all_products_df_display = products_df.reset_index()
-            all_products_df_display.columns = ['Product'] + list(all_products_df_display.columns[1:])
             
-            # Format numerical columns for better readability (only if they exist)
-            if 'Spend' in all_products_df_display.columns:
-                all_products_df_display['Spend'] = all_products_df_display['Spend'].apply(format_currency)
-            if 'Revenue' in all_products_df_display.columns:
-                all_products_df_display['Revenue'] = all_products_df_display['Revenue'].apply(format_currency)
-            if 'ROAS' in all_products_df_display.columns:
-                all_products_df_display['ROAS'] = all_products_df_display['ROAS'].apply(format_roas)
-            if 'CTR' in all_products_df_display.columns:
-                all_products_df_display['CTR'] = all_products_df_display['CTR'].apply(format_percentage)
-            if 'CPM' in all_products_df_display.columns:
-                all_products_df_display['CPM'] = all_products_df_display['CPM'].apply(format_currency)
-            if 'Thumbstop' in all_products_df_display.columns:
-                all_products_df_display['Thumbstop'] = all_products_df_display['Thumbstop'].apply(format_percentage)
-            if 'AOV' in all_products_df_display.columns:
-                all_products_df_display['AOV'] = all_products_df_display['AOV'].apply(format_currency)
-            if 'Impressions' in all_products_df_display.columns:
-                all_products_df_display['Impressions'] = all_products_df_display['Impressions'].apply(lambda x: f"{x:,.0f}")
-            if 'Link Clicks' in all_products_df_display.columns:
-                all_products_df_display['Link Clicks'] = all_products_df_display['Link Clicks'].apply(lambda x: f"{x:,.0f}")
-            if 'Video Views' in all_products_df_display.columns:
-                all_products_df_display['Video Views'] = all_products_df_display['Video Views'].apply(lambda x: f"{x:,.0f}")
-            if 'Transactions' in all_products_df_display.columns:
-                all_products_df_display['Transactions'] = all_products_df_display['Transactions'].apply(lambda x: f"{x:,.0f}")
+            # Add thumbnail column for each product first
+            # After reset_index(), the first column is the group_by_field (product)
+            first_column_name = all_products_df_display.columns[0]
+            all_products_df_display['Thumbnail'] = all_products_df_display[first_column_name].apply(
+                lambda product: get_top_spending_ad_thumbnail(ad_objects, 'product', product)
+            )
             
-            st.dataframe(all_products_df_display, use_container_width=True, hide_index=True)
+            # Now reorder columns to put Thumbnail first
+            columns = ['Thumbnail'] + [col for col in all_products_df_display.columns if col != 'Thumbnail']
+            all_products_df_display = all_products_df_display[columns]
+            
+            st.dataframe(
+                all_products_df_display,
+                column_config={
+                    "Thumbnail": st.column_config.ImageColumn(
+                        "Thumbnail",
+                        width="small"
+                    )
+                },
+                use_container_width=True,
+                hide_index=True
+            )
     
     st.markdown("---")
     
@@ -3084,61 +2636,52 @@ def display_summary_tab(ad_objects, top_n=DEFAULT_TOP_N):
     
     if not creators_grouped_df.empty:
         # Show top N creators
-        top_creators_df = creators_grouped_df.head(top_n)
+        top_creators_df = creators_grouped_df.head(top_n).copy()
         
-        # Format numerical columns for better readability (only if they exist)
-        if 'Spend' in top_creators_df.columns:
-            top_creators_df['Spend'] = top_creators_df['Spend'].apply(format_currency)
-        if 'Revenue' in top_creators_df.columns:
-            top_creators_df['Revenue'] = top_creators_df['Revenue'].apply(format_currency)
-        if 'ROAS' in top_creators_df.columns:
-            top_creators_df['ROAS'] = top_creators_df['ROAS'].apply(format_roas)
-        if 'CTR' in top_creators_df.columns:
-            top_creators_df['CTR'] = top_creators_df['CTR'].apply(format_percentage)
-        if 'CPM' in top_creators_df.columns:
-            top_creators_df['CPM'] = top_creators_df['CPM'].apply(format_currency)
-        if 'Thumbstop' in top_creators_df.columns:
-            top_creators_df['Thumbstop'] = top_creators_df['Thumbstop'].apply(format_percentage)
-        if 'AOV' in top_creators_df.columns:
-            top_creators_df['AOV'] = top_creators_df['AOV'].apply(format_currency)
-        if 'Impressions' in top_creators_df.columns:
-            top_creators_df['Impressions'] = top_creators_df['Impressions'].apply(lambda x: f"{x:,.0f}")
-        if 'Link Clicks' in top_creators_df.columns:
-            top_creators_df['Link Clicks'] = top_creators_df['Link Clicks'].apply(lambda x: f"{x:,.0f}")
-        if 'Video Views' in top_creators_df.columns:
-            top_creators_df['Video Views'] = top_creators_df['Video Views'].apply(lambda x: f"{x:,.0f}")
-        if 'Transactions' in top_creators_df.columns:
-            top_creators_df['Transactions'] = top_creators_df['Transactions'].apply(lambda x: f"{x:,.0f}")
+        # Add thumbnail column for each creator first
+        top_creators_df['Thumbnail'] = top_creators_df['Creator'].apply(
+            lambda creator: get_top_spending_ad_thumbnail(ad_objects, 'creator', creator)
+        )
         
-        st.dataframe(top_creators_df, use_container_width=True, hide_index=True)
+        # Now reorder columns to put Thumbnail first
+        columns = ['Thumbnail'] + [col for col in top_creators_df.columns if col != 'Thumbnail']
+        top_creators_df = top_creators_df[columns]
+        
+        st.dataframe(
+            top_creators_df,
+            column_config={
+                "Thumbnail": st.column_config.ImageColumn(
+                    "Thumbnail",
+                    width="small"
+                )
+            },
+            use_container_width=True,
+            hide_index=True
+        )
         
         # Show all creators in expander
         with st.expander(f"👥 Show all {len(creators_grouped_df)} creators"):
-            # Format numerical columns for better readability (only if they exist)
-            if 'Spend' in creators_grouped_df.columns:
-                creators_grouped_df['Spend'] = creators_grouped_df['Spend'].apply(format_currency)
-            if 'Revenue' in creators_grouped_df.columns:
-                creators_grouped_df['Revenue'] = creators_grouped_df['Revenue'].apply(format_currency)
-            if 'ROAS' in creators_grouped_df.columns:
-                creators_grouped_df['ROAS'] = creators_grouped_df['ROAS'].apply(format_roas)
-            if 'CTR' in creators_grouped_df.columns:
-                creators_grouped_df['CTR'] = creators_grouped_df['CTR'].apply(format_percentage)
-            if 'CPM' in creators_grouped_df.columns:
-                creators_grouped_df['CPM'] = creators_grouped_df['CPM'].apply(format_currency)
-            if 'Thumbstop' in creators_grouped_df.columns:
-                creators_grouped_df['Thumbstop'] = creators_grouped_df['Thumbstop'].apply(format_percentage)
-            if 'AOV' in creators_grouped_df.columns:
-                creators_grouped_df['AOV'] = creators_grouped_df['AOV'].apply(format_currency)
-            if 'Impressions' in creators_grouped_df.columns:
-                creators_grouped_df['Impressions'] = creators_grouped_df['Impressions'].apply(lambda x: f"{x:,.0f}")
-            if 'Link Clicks' in creators_grouped_df.columns:
-                creators_grouped_df['Link Clicks'] = creators_grouped_df['Link Clicks'].apply(lambda x: f"{x:,.0f}")
-            if 'Video Views' in creators_grouped_df.columns:
-                creators_grouped_df['Video Views'] = creators_grouped_df['Video Views'].apply(lambda x: f"{x:,.0f}")
-            if 'Transactions' in creators_grouped_df.columns:
-                creators_grouped_df['Transactions'] = creators_grouped_df['Transactions'].apply(lambda x: f"{x:,.0f}")
+            # Add thumbnail column for all creators first
+            all_creators_df = creators_grouped_df.copy()
+            all_creators_df['Thumbnail'] = all_creators_df['Creator'].apply(
+                lambda creator: get_top_spending_ad_thumbnail(ad_objects, 'creator', creator)
+            )
             
-            st.dataframe(creators_grouped_df, use_container_width=True, hide_index=True)
+            # Now reorder columns to put Thumbnail first
+            columns = ['Thumbnail'] + [col for col in all_creators_df.columns if col != 'Thumbnail']
+            all_creators_df = all_creators_df[columns]
+            
+            st.dataframe(
+                all_creators_df,
+                column_config={
+                    "Thumbnail": st.column_config.ImageColumn(
+                        "Thumbnail",
+                        width="small"
+                    )
+                },
+                use_container_width=True,
+                hide_index=True
+            )
     
     st.markdown("---")
     
@@ -3152,11 +2695,11 @@ def display_summary_tab(ad_objects, top_n=DEFAULT_TOP_N):
         
         # Format the display values
         display_agencies_df['Spend_Display'] = display_agencies_df['Spend'].apply(format_currency)
-        display_agencies_df['ROAS_Display'] = display_agencies_df['ROAS'].apply(format_roas)
-        display_agencies_df['CTR_Display'] = display_agencies_df['CTR'].apply(format_percentage)
-        display_agencies_df['CPM_Display'] = display_agencies_df['CPM'].apply(format_currency)
-        display_agencies_df['Thumbstop_Display'] = display_agencies_df['Thumbstop'].apply(format_percentage)
-        display_agencies_df['AOV_Display'] = display_agencies_df['AOV'].apply(format_currency)
+        display_agencies_df['ROAS_Display'] = display_agencies_df['ROAS'].apply(lambda x: f"{x:.6f}")
+        display_agencies_df['CTR_Display'] = display_agencies_df['CTR'].apply(lambda x: f"{x:.2f}%")
+        display_agencies_df['CPM_Display'] = display_agencies_df['CPM'].apply(lambda x: f"${x:.2f}")
+        display_agencies_df['Thumbstop_Display'] = display_agencies_df['Thumbstop'].apply(lambda x: f"{x:.2f}%")
+        display_agencies_df['AOV_Display'] = display_agencies_df['AOV'].apply(lambda x: f"${x:.2f}")
         
         # Reset index to get agency names as a column
         display_agencies_df = display_agencies_df.reset_index()
@@ -3165,8 +2708,29 @@ def display_summary_tab(ad_objects, top_n=DEFAULT_TOP_N):
         display_agencies_df = display_agencies_df[['agency', 'Spend_Display', 'ROAS_Display', 'CTR_Display', 'CPM_Display', 'Thumbstop_Display', 'AOV_Display']]
         display_agencies_df.columns = ['Agency', 'Spend', 'ROAS', 'CTR', 'CPM', 'Thumbstop', 'AOV']
         
+        # Add thumbnail column for each agency first
+        # After reset_index(), the first column is the group_by_field (agency)
+        first_column_name = display_agencies_df.columns[0]
+        display_agencies_df['Thumbnail'] = display_agencies_df[first_column_name].apply(
+            lambda agency: get_top_spending_ad_thumbnail(ad_objects, 'agency', agency)
+        )
+        
+        # Now reorder columns to put Thumbnail first
+        columns = ['Thumbnail'] + [col for col in display_agencies_df.columns if col != 'Thumbnail']
+        display_agencies_df = display_agencies_df[columns]
+        
         # The data is already sorted by calculate_aggregated_metrics, so we can use it directly
-        st.dataframe(display_agencies_df, use_container_width=True, hide_index=True)
+        st.dataframe(
+            display_agencies_df,
+            column_config={
+                "Thumbnail": st.column_config.ImageColumn(
+                    "Thumbnail",
+                    width="small"
+                )
+            },
+            use_container_width=True,
+            hide_index=True
+        )
 
 def display_all_ads_tab(ad_objects):
     """Display the All Ads tab with comprehensive filtering and sorting capabilities"""
@@ -3292,19 +2856,6 @@ def display_all_ads_tab(ad_objects):
         
         # Remove Thumbnail column from display
         display_df = display_df[[col for col in display_df.columns if col != 'Thumbnail']]
-        
-        # Format numerical columns for better readability
-        display_df['Spend'] = display_df['Spend'].apply(format_currency)
-        display_df['Revenue'] = display_df['Revenue'].apply(format_currency)
-        display_df['ROAS'] = display_df['ROAS'].apply(format_roas)
-        display_df['CTR'] = display_df['CTR'].apply(format_percentage)
-        display_df['CPM'] = display_df['CPM'].apply(format_currency)
-        display_df['Thumbstop'] = display_df['Thumbstop'].apply(format_percentage)
-        display_df['AOV'] = display_df['AOV'].apply(format_currency)
-        display_df['Impressions'] = display_df['Impressions'].apply(lambda x: f"{x:,.0f}")
-        display_df['Link Clicks'] = display_df['Link Clicks'].apply(lambda x: f"{x:,.0f}")
-        display_df['Video Views'] = display_df['Video Views'].apply(lambda x: f"{x:,.0f}")
-        display_df['Transactions'] = display_df['Transactions'].apply(lambda x: f"{x:,.0f}")
         
         st.dataframe(
             display_df,
@@ -3453,15 +3004,15 @@ def display_creator_analysis_tab(ad_objects):
     if 'Revenue' in display_df_formatted.columns:
         display_df_formatted['Revenue'] = display_df_formatted['Revenue'].apply(format_currency)
     if 'ROAS' in display_df_formatted.columns:
-        display_df_formatted['ROAS'] = display_df_formatted['ROAS'].apply(format_roas)
+        display_df_formatted['ROAS'] = display_df_formatted['ROAS'].apply(lambda x: f"{x:.2f}")
     if 'CTR' in display_df_formatted.columns:
-        display_df_formatted['CTR'] = display_df_formatted['CTR'].apply(format_percentage)
+        display_df_formatted['CTR'] = display_df_formatted['CTR'].apply(lambda x: f"{x:.2f}%")
     if 'CPM' in display_df_formatted.columns:
-        display_df_formatted['CPM'] = display_df_formatted['CPM'].apply(format_currency)
+        display_df_formatted['CPM'] = display_df_formatted['CPM'].apply(lambda x: f"${x:.2f}")
     if 'Thumbstop' in display_df_formatted.columns:
-        display_df_formatted['Thumbstop'] = display_df_formatted['Thumbstop'].apply(format_percentage)
+        display_df_formatted['Thumbstop'] = display_df_formatted['Thumbstop'].apply(lambda x: f"{x:.2f}%")
     if 'AOV' in display_df_formatted.columns:
-        display_df_formatted['AOV'] = display_df_formatted['AOV'].apply(format_currency)
+        display_df_formatted['AOV'] = display_df_formatted['AOV'].apply(lambda x: f"${x:.2f}")
     if 'Transactions' in display_df_formatted.columns:
         display_df_formatted['Transactions'] = display_df_formatted['Transactions'].apply(lambda x: f"{x:,.0f}")
     if 'Impressions' in display_df_formatted.columns:
@@ -3536,15 +3087,15 @@ def display_product_analysis_tab(ad_objects):
     if 'Revenue' in display_df_formatted.columns:
         display_df_formatted['Revenue'] = display_df_formatted['Revenue'].apply(format_currency)
     if 'ROAS' in display_df_formatted.columns:
-        display_df_formatted['ROAS'] = display_df_formatted['ROAS'].apply(format_roas)
+        display_df_formatted['ROAS'] = display_df_formatted['ROAS'].apply(lambda x: f"{x:.2f}")
     if 'CTR' in display_df_formatted.columns:
-        display_df_formatted['CTR'] = display_df_formatted['CTR'].apply(format_percentage)
+        display_df_formatted['CTR'] = display_df_formatted['CTR'].apply(lambda x: f"{x:.2f}%")
     if 'CPM' in display_df_formatted.columns:
-        display_df_formatted['CPM'] = display_df_formatted['CPM'].apply(format_currency)
+        display_df_formatted['CPM'] = display_df_formatted['CPM'].apply(lambda x: f"${x:.2f}")
     if 'Thumbstop' in display_df_formatted.columns:
-        display_df_formatted['Thumbstop'] = display_df_formatted['Thumbstop'].apply(format_percentage)
+        display_df_formatted['Thumbstop'] = display_df_formatted['Thumbstop'].apply(lambda x: f"{x:.2f}%")
     if 'AOV' in display_df_formatted.columns:
-        display_df_formatted['AOV'] = display_df_formatted['AOV'].apply(format_currency)
+        display_df_formatted['AOV'] = display_df_formatted['AOV'].apply(lambda x: f"${x:.2f}")
     if 'Transactions' in display_df_formatted.columns:
         display_df_formatted['Transactions'] = display_df_formatted['Transactions'].apply(lambda x: f"{x:,.0f}")
     if 'Impressions' in display_df_formatted.columns:
@@ -3573,9 +3124,8 @@ def display_campaign_explorer_tab(ad_objects, top_n=DEFAULT_TOP_N, core_products
     """Display the Campaign Explorer tab with campaign and product filtering using tabs"""
     st.header("🎯 Campaign Explorer")
     
-    # Debug: Print the current USE_NORTHBEAM_DATA setting
-
-    use_northbeam = getattr(main, 'USE_NORTHBEAM_DATA', True)
+    # Use the currently selected view source from session state
+    current_view_source = st.session_state.get('current_view_source', 'Meta')
     
     # Use hard-coded campaign types from CAMPAIGN_TYPES
     campaigns = []
@@ -3630,15 +3180,15 @@ def display_campaign_explorer_tab(ad_objects, top_n=DEFAULT_TOP_N, core_products
                 st.warning(f"No ads found for campaign: {campaign}")
                 continue
             
-            # Campaign summary metrics - use the correct data source based on USE_NORTHBEAM_DATA setting
-            data_source = 'northbeam' if use_northbeam else 'meta'
+            # Campaign summary metrics - use the currently selected view source
+            data_source = 'northbeam' if current_view_source == 'Northbeam' else 'meta'
             campaign_metrics = calculate_campaign_metrics(campaign_ads, data_source=data_source)
             
             # Display metrics in a grid
             col1, col2, col3, col4 = st.columns(4)
             
             with col1:
-                create_metric_card("Total Ads", campaign_metrics['total_ads'])
+                create_metric_card("Total Ads With Delivery", campaign_metrics['total_ads'])
                 create_metric_card("Total Spend", campaign_metrics['total_spend'], format_currency)
             
             with col2:
@@ -3702,18 +3252,21 @@ def display_campaign_explorer_tab(ad_objects, top_n=DEFAULT_TOP_N, core_products
                         st.info(f"No ads found for {product} in {campaign} campaign")
                         continue
                     
-                    # Show product summary - use the correct data source based on USE_NORTHBEAM_DATA setting
+                    # Show product summary - use the currently selected view source
                     product_metrics = calculate_campaign_metrics(product_ads, data_source=data_source)
                     
                     # Display product metrics in a consistent card format
                     col1, col2, col3, col4 = st.columns(4)
                     
                     with col1:
-                        create_metric_card("Ads", product_metrics['total_ads'])
+                        create_metric_card("Ads With Delivery", product_metrics['total_ads'])
                         create_metric_card("Spend", product_metrics['total_spend'], format_currency)
                     
                     with col2:
-                        create_metric_card("ROAS", product_metrics['roas'], format_roas)
+                        # Get target ROAS for this campaign type
+                        target_roas = get_target_roas(campaign)
+                        subtitle = f"(Target: {target_roas})" if target_roas is not None else None
+                        create_metric_card("ROAS", product_metrics['roas'], format_roas, subtitle)
                         create_metric_card("CTR", product_metrics['ctr'], format_percentage)
                     
                     with col3:
@@ -3738,8 +3291,8 @@ def display_campaign_explorer_tab(ad_objects, top_n=DEFAULT_TOP_N, core_products
                         primary_url, thumbnail_url = get_ad_url(ad_id, ad_type) if ad_id else ("", "")
 
                         ads_data.append({
+                            'Thumbnail': get_thumbnail_url_from_cache(ad_id),
                             'Link': primary_url,
-                            'Thumbnail': thumbnail_url,  # Hidden fallback column
                             'Ad Type': ad['metadata'].get('ad_type', 'Unknown'),
                             'Ad Name': ad['ad_ids']['ad_name'],
                             'Merged': ad.get('merged_count', 1),  # Show how many ads were merged
@@ -3771,34 +3324,30 @@ def display_campaign_explorer_tab(ad_objects, top_n=DEFAULT_TOP_N, core_products
                         display_ads_df_formatted = display_ads_df.copy()
                         display_ads_df_formatted['Spend'] = display_ads_df_formatted['Spend'].apply(format_currency)
                         display_ads_df_formatted['Revenue'] = display_ads_df_formatted['Revenue'].apply(format_currency)
-                        display_ads_df_formatted['ROAS'] = display_ads_df_formatted['ROAS'].apply(format_roas)
-                        display_ads_df_formatted['CTR'] = display_ads_df_formatted['CTR'].apply(format_percentage)
-                        display_ads_df_formatted['CPM'] = display_ads_df_formatted['CPM'].apply(format_currency)
-                        display_ads_df_formatted['Thumbstop'] = display_ads_df_formatted['Thumbstop'].apply(format_percentage)
-                        display_ads_df_formatted['AOV'] = display_ads_df_formatted['AOV'].apply(format_currency)
+                        display_ads_df_formatted['ROAS'] = display_ads_df_formatted['ROAS'].apply(lambda x: f"{x:.2f}")
+                        display_ads_df_formatted['CTR'] = display_ads_df_formatted['CTR'].apply(lambda x: f"{x:.2f}%")
+                        display_ads_df_formatted['CPM'] = display_ads_df_formatted['CPM'].apply(lambda x: f"${x:.2f}")
+                        display_ads_df_formatted['Thumbstop'] = display_ads_df_formatted['Thumbstop'].apply(lambda x: f"{x:.2f}%")
+                        display_ads_df_formatted['AOV'] = display_ads_df_formatted['AOV'].apply(lambda x: f"${x:.2f}")
                         display_ads_df_formatted['Transactions'] = display_ads_df_formatted['Transactions'].apply(lambda x: f"{x:,.0f}")
                         display_ads_df_formatted['Impressions'] = display_ads_df_formatted['Impressions'].apply(lambda x: f"{x:,.0f}")
                         display_ads_df_formatted['Link Clicks'] = display_ads_df_formatted['Link Clicks'].apply(lambda x: f"{x:,.0f}")
                         display_ads_df_formatted['Video Views'] = display_ads_df_formatted['Video Views'].apply(lambda x: f"{x:,.0f}")
                         
-                        # Create display dataframe with fallback logic
+                        # Create display dataframe with thumbnail column
                         display_ads_df = display_ads_df.copy()
-                        
-                        # Use thumbnail as fallback when Link is empty
-                        for idx, row in display_ads_df.iterrows():
-                            if not row['Link'] and row['Thumbnail']:
-                                display_ads_df.at[idx, 'Link'] = row['Thumbnail']
-                        
-                        # Remove Thumbnail column from display
-                        display_ads_df = display_ads_df[[col for col in display_ads_df.columns if col != 'Thumbnail']]
                         
                         # Use LinkColumn for clickable URLs
                         st.dataframe(
-                            display_ads_df_formatted,
+                            display_ads_df,
                             column_config={
+                                "Thumbnail": st.column_config.ImageColumn(
+                                    "Thumbnail",
+                                    width="small"
+                                ),
                                 "Link": st.column_config.LinkColumn(
                                     "Link",
-                                    help="Click to view ad",
+                                    help="Click to view ad preview",
                                     display_text="🔗"
                                 )
                             },
@@ -3808,48 +3357,19 @@ def display_campaign_explorer_tab(ad_objects, top_n=DEFAULT_TOP_N, core_products
                         
                         # Show all ads in expander
                         with st.expander(f"📊 Show all {len(ads_df)} ads"):
-                            # Create display dataframe with fallback logic
+                            # Create display dataframe with thumbnail column
                             display_all_ads_df = ads_df.copy()
                             
-                            # Use thumbnail as fallback when Link is empty
-                            for idx, row in display_all_ads_df.iterrows():
-                                if not row['Link'] and row['Thumbnail']:
-                                    display_all_ads_df.at[idx, 'Link'] = row['Thumbnail']
-                            
-                            # Remove Thumbnail column from display
-                            display_all_ads_df = display_all_ads_df[[col for col in display_all_ads_df.columns if col != 'Thumbnail']]
-                            
-                            # Format the dataframe for display
-                            display_all_ads_df_formatted = display_all_ads_df.copy()
-                            if 'Spend' in display_all_ads_df_formatted.columns:
-                                display_all_ads_df_formatted['Spend'] = display_all_ads_df_formatted['Spend'].apply(format_currency)
-                            if 'Revenue' in display_all_ads_df_formatted.columns:
-                                display_all_ads_df_formatted['Revenue'] = display_all_ads_df_formatted['Revenue'].apply(format_currency)
-                            if 'ROAS' in display_all_ads_df_formatted.columns:
-                                display_all_ads_df_formatted['ROAS'] = display_all_ads_df_formatted['ROAS'].apply(format_roas)
-                            if 'CTR' in display_all_ads_df_formatted.columns:
-                                display_all_ads_df_formatted['CTR'] = display_all_ads_df_formatted['CTR'].apply(format_percentage)
-                            if 'CPM' in display_all_ads_df_formatted.columns:
-                                display_all_ads_df_formatted['CPM'] = display_all_ads_df_formatted['CPM'].apply(format_currency)
-                            if 'Thumbstop' in display_all_ads_df_formatted.columns:
-                                display_all_ads_df_formatted['Thumbstop'] = display_all_ads_df_formatted['Thumbstop'].apply(format_percentage)
-                            if 'AOV' in display_all_ads_df_formatted.columns:
-                                display_all_ads_df_formatted['AOV'] = display_all_ads_df_formatted['AOV'].apply(format_currency)
-                            if 'Transactions' in display_all_ads_df_formatted.columns:
-                                display_all_ads_df_formatted['Transactions'] = display_all_ads_df_formatted['Transactions'].apply(lambda x: f"{x:,.0f}")
-                            if 'Impressions' in display_all_ads_df_formatted.columns:
-                                display_all_ads_df_formatted['Impressions'] = display_all_ads_df_formatted['Impressions'].apply(lambda x: f"{x:,.0f}")
-                            if 'Link Clicks' in display_all_ads_df_formatted.columns:
-                                display_all_ads_df_formatted['Link Clicks'] = display_all_ads_df_formatted['Link Clicks'].apply(lambda x: f"{x:,.0f}")
-                            if 'Video Views' in display_all_ads_df_formatted.columns:
-                                display_all_ads_df_formatted['Video Views'] = display_all_ads_df_formatted['Video Views'].apply(lambda x: f"{x:,.0f}")
-                            
                             st.dataframe(
-                                display_all_ads_df_formatted,
+                                display_all_ads_df,
                                 column_config={
+                                    "Thumbnail": st.column_config.ImageColumn(
+                                        "Thumbnail",
+                                        width="small"
+                                    ),
                                     "Link": st.column_config.LinkColumn(
                                         "Link",
-                                        help="Click to view ad",
+                                        help="Click to view ad preview",
                                         display_text="🔗"
                                     )
                                 },
@@ -3888,41 +3408,70 @@ def display_campaign_explorer_tab(ad_objects, top_n=DEFAULT_TOP_N, core_products
                     display_creators_df = creators_grouped_df.head(top_n).copy()
                     
                     if not display_creators_df.empty:
+                        # Add thumbnail column for each creator first
+                        display_creators_df['Thumbnail'] = display_creators_df['Creator'].apply(
+                            lambda creator: get_top_spending_ad_thumbnail(ad_objects, 'creator', creator)
+                        )
+                        
+                        # Now reorder columns to put Thumbnail first
+                        columns = ['Thumbnail'] + [col for col in display_creators_df.columns if col != 'Thumbnail']
+                        display_creators_df = display_creators_df[columns]
+                        
                         # Format the dataframe for display
                         display_creators_df_formatted = display_creators_df.copy()
                         display_creators_df_formatted['Spend'] = display_creators_df_formatted['Spend'].apply(format_currency)
-                        display_creators_df_formatted['Revenue'] = display_creators_df_formatted['Revenue'].apply(format_currency)
-                        display_creators_df_formatted['ROAS'] = display_creators_df_formatted['ROAS'].apply(format_roas)
-                        display_creators_df_formatted['CTR'] = display_creators_df_formatted['CTR'].apply(format_percentage)
-                        display_creators_df_formatted['CPM'] = display_creators_df_formatted['CPM'].apply(format_currency)
-                        display_creators_df_formatted['Thumbstop'] = display_creators_df_formatted['Thumbstop'].apply(format_percentage)
-                        display_creators_df_formatted['AOV'] = display_creators_df_formatted['AOV'].apply(format_currency)
-                        display_creators_df_formatted['Transactions'] = display_creators_df_formatted['Transactions'].apply(lambda x: f"{x:,.0f}")
-                        display_creators_df_formatted['Impressions'] = display_creators_df_formatted['Impressions'].apply(lambda x: f"{x:,.0f}")
-                        display_creators_df_formatted['Link Clicks'] = display_creators_df_formatted['Link Clicks'].apply(lambda x: f"{x:,.0f}")
-                        display_creators_df_formatted['Video Views'] = display_creators_df_formatted['Video Views'].apply(lambda x: f"{x:,.0f}")
+                        display_creators_df_formatted['ROAS'] = display_creators_df_formatted['ROAS'].apply(lambda x: f"{x:.2f}")
+                        display_creators_df_formatted['CTR'] = display_creators_df_formatted['CTR'].apply(lambda x: f"{x:.2f}%")
+                        display_creators_df_formatted['CPM'] = display_creators_df_formatted['CPM'].apply(lambda x: f"${x:.2f}")
+                        display_creators_df_formatted['Thumbstop'] = display_creators_df_formatted['Thumbstop'].apply(lambda x: f"{x:.2f}%")
+                        display_creators_df_formatted['AOV'] = display_creators_df_formatted['AOV'].apply(lambda x: f"${x:.2f}")
                         
-                        # Display the formatted dataframe
-                        st.dataframe(display_creators_df_formatted, use_container_width=True, hide_index=True)
+                        # Use raw numbers for proper sorting, let Streamlit handle display
+                        st.dataframe(
+                            display_creators_df,
+                            column_config={
+                                "Thumbnail": st.column_config.ImageColumn(
+                                    "Thumbnail",
+                                    width="small"
+                                )
+                            },
+                            use_container_width=True,
+                            hide_index=True
+                        )
                         
                         # Show all creators in expander
                         with st.expander(f"👥 Show all {len(creators_grouped_df)} creators"):
-                            # Format all creators dataframe
-                            all_creators_formatted = creators_grouped_df.copy()
-                            all_creators_formatted['Spend'] = all_creators_formatted['Spend'].apply(format_currency)
-                            all_creators_formatted['Revenue'] = all_creators_formatted['Revenue'].apply(format_currency)
-                            all_creators_formatted['ROAS'] = all_creators_formatted['ROAS'].apply(format_roas)
-                            all_creators_formatted['CTR'] = all_creators_formatted['CTR'].apply(format_percentage)
-                            all_creators_formatted['CPM'] = all_creators_formatted['CPM'].apply(format_currency)
-                            all_creators_formatted['Thumbstop'] = all_creators_formatted['Thumbstop'].apply(format_percentage)
-                            all_creators_formatted['AOV'] = all_creators_formatted['AOV'].apply(format_currency)
-                            all_creators_formatted['Transactions'] = all_creators_formatted['Transactions'].apply(lambda x: f"{x:,.0f}")
-                            all_creators_formatted['Impressions'] = all_creators_formatted['Impressions'].apply(lambda x: f"{x:,.0f}")
-                            all_creators_formatted['Link Clicks'] = all_creators_formatted['Link Clicks'].apply(lambda x: f"{x:,.0f}")
-                            all_creators_formatted['Video Views'] = all_creators_formatted['Video Views'].apply(lambda x: f"{x:,.0f}")
+                            # Add thumbnail column for all creators first
+                            all_creators_df = creators_grouped_df.copy()
+                            all_creators_df['Thumbnail'] = all_creators_df['Creator'].apply(
+                                lambda creator: get_top_spending_ad_thumbnail(ad_objects, 'creator', creator)
+                            )
                             
-                            # Display the formatted dataframe
-                            st.dataframe(all_creators_formatted, use_container_width=True, hide_index=True)
+                            # Now reorder columns to put Thumbnail first
+                            columns = ['Thumbnail'] + [col for col in all_creators_df.columns if col != 'Thumbnail']
+                            all_creators_df = all_creators_df[columns]
+                            
+                            # Format all creators dataframe
+                            all_creators_formatted = all_creators_df.copy()
+                            all_creators_formatted['Spend'] = all_creators_formatted['Spend'].apply(format_currency)
+                            all_creators_formatted['ROAS'] = all_creators_formatted['ROAS'].apply(lambda x: f"{x:.2f}")
+                            all_creators_formatted['CTR'] = all_creators_formatted['CTR'].apply(lambda x: f"{x:.2f}%")
+                            all_creators_formatted['CPM'] = all_creators_formatted['CPM'].apply(lambda x: f"${x:.2f}")
+                            all_creators_formatted['Thumbstop'] = all_creators_formatted['Thumbstop'].apply(lambda x: f"{x:.2f}%")
+                            all_creators_formatted['AOV'] = all_creators_df['AOV'].apply(lambda x: f"${x:.2f}")
+                            
+                            # Use raw numbers for proper sorting, let Streamlit handle display
+                            st.dataframe(
+                                all_creators_df,
+                                column_config={
+                                    "Thumbnail": st.column_config.ImageColumn(
+                                        "Thumbnail",
+                                        width="small"
+                                    )
+                                },
+                                use_container_width=True,
+                                hide_index=True
+                            )
                     else:
                         st.info("No creator data available for the selected filters.")
 
@@ -4035,7 +3584,7 @@ def display_product_creator_explorer_tab(ad_objects):
         col1, col2, col3, col4 = st.columns(4)
         
         with col1:
-            create_metric_card("Total Ads", total_ads)
+            create_metric_card("Total Ads With Delivery", total_ads)
             create_metric_card("Total Spend", total_spend, format_currency)
         
         with col2:
@@ -4064,8 +3613,8 @@ def display_product_creator_explorer_tab(ad_objects):
             primary_url, thumbnail_url = get_ad_url(ad_id, ad_type) if ad_id else ("", "")
             
             ads_data.append({
+                'Thumbnail': get_thumbnail_url_from_cache(ad_id),
                 'Link': primary_url,
-                'Thumbnail': thumbnail_url,  # Hidden fallback column
                 'Ad Type': ad['metadata'].get('ad_type', 'Unknown'),
                 'Ad Name': ad['ad_ids']['ad_name'],
                 'Campaign Type': ad['metadata'].get('campaign_type', 'Unknown'),
@@ -4096,15 +3645,15 @@ def display_product_creator_explorer_tab(ad_objects):
         if 'Revenue' in display_df_formatted.columns:
             display_df_formatted['Revenue'] = display_df_formatted['Revenue'].apply(format_currency)
         if 'ROAS' in display_df_formatted.columns:
-            display_df_formatted['ROAS'] = display_df_formatted['ROAS'].apply(format_roas)
+            display_df_formatted['ROAS'] = display_df_formatted['ROAS'].apply(lambda x: f"{x:.2f}")
         if 'CTR' in display_df_formatted.columns:
-            display_df_formatted['CTR'] = display_df_formatted['CTR'].apply(format_percentage)
+            display_df_formatted['CTR'] = display_df_formatted['CTR'].apply(lambda x: f"{x:.2f}%")
         if 'CPM' in display_df_formatted.columns:
-            display_df_formatted['CPM'] = display_df_formatted['CPM'].apply(format_currency)
+            display_df_formatted['CPM'] = display_df_formatted['CPM'].apply(lambda x: f"${x:.2f}")
         if 'Thumbstop' in display_df_formatted.columns:
-            display_df_formatted['Thumbstop'] = display_df_formatted['Thumbstop'].apply(format_percentage)
+            display_df_formatted['Thumbstop'] = display_df_formatted['Thumbstop'].apply(lambda x: f"{x:.2f}%")
         if 'AOV' in display_df_formatted.columns:
-            display_df_formatted['AOV'] = display_df_formatted['AOV'].apply(format_currency)
+            display_df_formatted['AOV'] = display_df_formatted['AOV'].apply(lambda x: f"${x:.2f}")
         if 'Transactions' in display_df_formatted.columns:
             display_df_formatted['Transactions'] = display_df_formatted['Transactions'].apply(lambda x: f"{x:,.0f}")
         if 'Impressions' in display_df_formatted.columns:
@@ -4114,23 +3663,19 @@ def display_product_creator_explorer_tab(ad_objects):
         if 'Video Views' in display_df_formatted.columns:
             display_df_formatted['Video Views'] = display_df_formatted['Video Views'].apply(lambda x: f"{x:,.0f}")
         
-        # Create display dataframe with fallback logic
+        # Create display dataframe with thumbnail column
         display_df_formatted = display_df_formatted.copy()
-        
-        # Use thumbnail as fallback when Link is empty
-        for idx, row in display_df_formatted.iterrows():
-            if not row['Link'] and row['Thumbnail']:
-                display_df_formatted.at[idx, 'Link'] = row['Thumbnail']
-        
-        # Remove Thumbnail column from display
-        display_df_formatted = display_df_formatted[[col for col in display_df_formatted.columns if col != 'Thumbnail']]
         
         st.dataframe(
             display_df_formatted,
             column_config={
+                "Thumbnail": st.column_config.ImageColumn(
+                    "Thumbnail",
+                    width="small"
+                ),
                 "Link": st.column_config.LinkColumn(
                     "Link",
-                    help="Click to view ad",
+                    help="Click to view ad preview",
                     display_text="🔗"
                 )
             },
@@ -4145,6 +3690,9 @@ def display_product_creator_explorer_tab(ad_objects):
 
 def main():
     st.title("🎯 Campaign Reporting Dashboard")
+    
+
+    
     st.markdown("---")
     
     # Initialize session state for data persistence
@@ -4153,6 +3701,10 @@ def main():
     if 'report_config' not in st.session_state:
         st.session_state.report_config = None
     
+    
+    
+
+    
 
     
     # Sidebar with configuration
@@ -4160,31 +3712,83 @@ def main():
     
     # Editable configuration
     st.sidebar.subheader("📅 Date Range")
-    col1, col2 = st.sidebar.columns(2)
-    with col1:
-        date_from = st.text_input("From", value=DEFAULT_DATE_FROM, key="date_from")
-    with col2:
-        date_to = st.text_input("To (inclusive)", value=DEFAULT_DATE_TO, key="date_to")
+    
+    # Initialize session state for dates if not exists
+    if 'date_from' not in st.session_state:
+        st.session_state.date_from = DEFAULT_DATE_FROM
+    if 'date_to' not in st.session_state:
+        st.session_state.date_to = DEFAULT_DATE_TO
+
+    date_from = st.sidebar.date_input(
+        "Start Date",
+        value=st.session_state.date_from,
+        format="YYYY-MM-DD"
+    )
+    date_to = st.sidebar.date_input(
+        "End Date (Inclusive)", 
+        value=st.session_state.date_to,
+        format="YYYY-MM-DD"
+    )
+    
+    # Update session state when dates change manually
+    if date_from != st.session_state.date_from:
+        st.session_state.date_from = date_from
+    if date_to != st.session_state.date_to:
+        st.session_state.date_to = date_to
     
     st.sidebar.subheader("📊 Settings")
     top_n = st.sidebar.number_input("Top N (default # ads/entities to display)", min_value=1, max_value=50, value=DEFAULT_TOP_N, key="top_n")
     merge_ads = st.sidebar.checkbox("Merge Ads with Same Name", value=DEFAULT_MERGE_ADS_WITH_SAME_NAME, key="merge_ads", help="Combine ads with identical names and campaign types, aggregate their metrics")
-    use_northbeam = st.sidebar.checkbox(
-        "Use Northbeam Data", 
-        value=DEFAULT_USE_NORTHBEAM_DATA, 
-        key="use_northbeam",
-        help="Toggle between Northbeam and Meta data sources. When data is cached, changes are instant!"
+    # Data source selection - at least one must be selected
+    st.sidebar.subheader("🔌 Data Sources")
+    
+    # Initialize data source session state if not exists
+    if 'use_meta' not in st.session_state:
+        st.session_state.use_meta = True
+    if 'use_northbeam' not in st.session_state:
+        st.session_state.use_northbeam = DEFAULT_USE_NORTHBEAM_DATA
+    
+    # Data source selection for NEXT report generation
+    # These checkboxes control what data will be fetched when you click "Generate Report"
+    
+    # Ensure at least one source is always selected
+    if not st.session_state.use_meta and not st.session_state.use_northbeam:
+        st.session_state.use_meta = True
+    
+    use_meta = st.sidebar.checkbox(
+        "Meta", 
+        key="use_meta",
+        help="Fetch data from Meta Ads API for the next report"
     )
+    
+    use_northbeam = st.sidebar.checkbox(
+        "Northbeam", 
+        key="use_northbeam",
+        help="Fetch data from Northbeam API for spend/revenue metrics in the next report"
+    )
+    
+    # Update session state and ensure at least one source is selected
+    if use_meta != st.session_state.use_meta:
+        st.session_state.use_meta = use_meta
+        if not use_meta and not use_northbeam:
+            st.session_state.use_northbeam = True
+            use_northbeam = True
+    
+    if use_northbeam != st.session_state.use_northbeam:
+        st.session_state.use_northbeam = use_northbeam
+        if not use_meta and not use_northbeam:
+            st.session_state.use_meta = True
+            use_meta = True
     
     
     use_cached_files = st.sidebar.checkbox("Use Cached Files", value=True, key="use_cached_files", 
-                                          help="Only use existing Meta insights and Northbeam files. Skip API calls.")
+                                          help="Uses previously fetched data for date range to speed up processing. Uncheck to fetch fresh data.")
     
-    # Update the global variable
-    set_use_cached_files(use_cached_files)
+    # Note: Cache management is now handled by media_urls_manager and Streamlit session state
     
-    # Update the global USE_NORTHBEAM_DATA variable for instant switching
+    # Update the global variables for instant switching
     main.USE_NORTHBEAM_DATA = use_northbeam
+    main.USE_META_DATA = use_meta
     
     st.sidebar.subheader("📦 Core Products")
     
@@ -4203,13 +3807,17 @@ def main():
         help="Separate multiple codes for the same product with a comma."
     )
     
+    # Convert to string format for API calls
+    date_from_str = date_from.strftime("%Y-%m-%d")
+    date_to_str = date_to.strftime("%Y-%m-%d")
+    
     # Check if configuration has changed and clear cached data if needed
     if st.session_state.comprehensive_ads and st.session_state.report_config:
             config = st.session_state.report_config
-            # Check if configuration has changed (excluding use_northbeam for instant switching)
+            # Check if configuration has changed (excluding data source settings for instant switching)
             config_changed = (
-                config.get('date_from') != date_from or
-                config.get('date_to') != date_to or
+                config.get('date_from') != date_from_str or
+                config.get('date_to') != date_to_str or
                 config.get('top_n') != top_n or
                 config.get('merge_ads') != merge_ads or
                 config.get('core_products_input') != core_products_input
@@ -4228,32 +3836,38 @@ def main():
                     del st.session_state.report_filename
                 if 'is_generating_google_doc' in st.session_state:
                     del st.session_state.is_generating_google_doc
-                st.info("🔄 Configuration changed. Please click 'Generate Report' to fetch fresh data with the new settings.")
-            else:
-                # Update the use_northbeam setting in the cached config for instant switching
-                if st.session_state.report_config:
-                    st.session_state.report_config['use_northbeam'] = use_northbeam
-    
-
-    
-
-    
-
+                auto_hide_status_message("🔄 Configuration changed. Please click 'Generate Report' to fetch fresh data with the new settings.", "info")
+            # Note: Data source checkboxes no longer affect the dropdown for existing reports
+            # The dropdown shows what data was actually fetched, not what will be fetched next
     
     
-
+    # Generate Report Button
     
-    # Generate Report Form
-    st.sidebar.markdown("---")
-    st.sidebar.subheader("📊 Generate Report")
+    generate_button = st.sidebar.button("🔄 Generate Report", type="primary")
     
-    with st.sidebar.form("generate_report"):
-        generate_button = st.form_submit_button("🔄 Generate Report", type="primary")
-    
-    # Status messages in sidebar - keep minimal
-    if st.session_state.comprehensive_ads and st.session_state.report_config:
-        # No status message - keep UI clean
-        pass
+    # Status display in sidebar
+    if 'status_messages' in st.session_state and st.session_state.status_messages:
+        # Show only the most recent status message
+        latest_message = list(st.session_state.status_messages.values())[-1]
+        message_type = latest_message['type']
+        message_text = latest_message['message']
+        
+        st.sidebar.markdown("---")
+        st.sidebar.subheader("📊 Status")
+        
+        if message_type == "info":
+            st.sidebar.info(f"ℹ️ {message_text}")
+        elif message_type == "success":
+            st.sidebar.success(f"✅ {message_text}")
+        elif message_type == "warning":
+            st.sidebar.warning(f"⚠️ {message_text}")
+        elif message_type == "error":
+            st.sidebar.error(f"❌ {message_text}")
+        
+        # Clear button for status
+        if st.sidebar.button("🗑️ Clear Status", key="clear_status"):
+            st.session_state.status_messages = {}
+            st.rerun()
     
 
     
@@ -4263,8 +3877,7 @@ def main():
 
     # Main content area
     if generate_button:
-        # Create a single progress element that gets updated
-        progress_placeholder = st.empty()
+        # Generate report with status messages
         
         try:
             # Temporarily update the global variables for this session
@@ -4273,6 +3886,9 @@ def main():
             main.TOP_N = top_n
             main.MERGE_ADS_WITH_SAME_NAME = merge_ads
             main.USE_NORTHBEAM_DATA = use_northbeam
+            
+            # Debug: Show what we're trying to fetch
+            auto_hide_status_message(f"🔄 Starting data fetch for {date_from} to {date_to} (Northbeam: {use_northbeam})", "info")
             
             # Parse core products from user-friendly format
             if core_products_input:
@@ -4289,42 +3905,75 @@ def main():
             
             # Always generate fresh comprehensive ad objects to ensure merge setting is respected
             
-            # Clear previous background task status
-            if 'background_task_status' in st.session_state:
-                del st.session_state.background_task_status
+
             
             # Define filename for saving
-            date_from_formatted = date_from.replace('-', '')
-            date_to_formatted = date_to.replace('-', '')
-            comprehensive_filename = f"campaign-reporting/processed/comprehensive_ads/comprehensive_ads_{date_from_formatted}-{date_to_formatted}.json"
+            date_from_formatted = date_from.strftime("%Y%m%d")
+            date_to_formatted = date_to.strftime("%Y%m%d")
+            comprehensive_filename = f"{ROOT_DIRECTORY}/processed/comprehensive_ads/comprehensive_ads_{date_from_formatted}-{date_to_formatted}.json"
             
-            # Set the global flag for using cached files
-            set_use_cached_files(use_cached_files)
+            # Note: Cache management is now handled by media_urls_manager and Streamlit session state
             
             # Update progress - Step 1: Checking existing data
-            progress_placeholder.info("🔍 Step 1/4: Fetching Meta & Northbeam data. This may take a few minutes.")
+            auto_hide_status_message("🔍 Step 1/4: Fetching Meta & Northbeam data. This may take a few minutes.", "info")
             
-            # Fetch data using the updated configuration
-            meta_insights, northbeam_df = fetch_all_data_sequentially(date_from, date_to)
+                        # Fetch data using concurrent configuration for better performance
+            meta_insights, northbeam_df = fetch_all_data_concurrently(date_from, date_to, use_cached_files, use_meta, use_northbeam)
             
             # Update progress - Step 2: Data fetched
-            progress_placeholder.info("📊 Step 2/4: Data fetched successfully")
+            auto_hide_status_message("📊 Step 2/4: Data fetched successfully", "info")
             
-            # Store meta_insights in session state for background processing
-            st.session_state.meta_insights = meta_insights
+            # Debug: Show what we got from selected sources
+            sources_fetched = []
+            if use_meta and meta_insights:
+                sources_fetched.append(f"Meta: {len(meta_insights)} ads")
+            if use_northbeam and northbeam_df is not None:
+                sources_fetched.append(f"Northbeam: {len(northbeam_df)} rows")
             
-            # Apply filtering to Northbeam data if it exists
-            if northbeam_df is not None:
+            if sources_fetched:
+                auto_hide_status_message(f"📊 Data fetched: {', '.join(sources_fetched)}", "info")
+            else:
+                auto_hide_status_message("⚠️ No data fetched from selected sources", "warning")
+            
+            # Check for Northbeam data failure and provide user guidance
+            if use_northbeam and (northbeam_df is None or (isinstance(northbeam_df, pd.DataFrame) and len(northbeam_df) == 0)):
+                # Show warning but continue with Meta data only
+                auto_hide_status_message("⚠️ Northbeam data unavailable. Try generating again if you need Northbeam metrics.", "warning")
+                st.warning("""
+                **⚠️ The system failed to fetch Northbeam data.
+
+                Click **"Generate Report"** again to retry— this typically resolves the issue.
+                
+                If the problem persists, **Check your Northbeam API credentials**
+                
+                """)
+            elif not use_northbeam:
+                # Meta-only mode, so this is expected
+                auto_hide_status_message("📊 Meta-only mode: Northbeam data not required", "info")
+            
+            # Apply filtering to Northbeam data if it exists and is selected
+            if use_northbeam and northbeam_df is not None and len(northbeam_df) > 0:
                 # Import the filtering function
                                                         # Removed import - functions are now merged into app.py
                 northbeam_df = filter_attribution_data(northbeam_df, ACCOUNTING_MODE_FILTER, NORTHBEAM_PLATFORM)
+                auto_hide_status_message(f"🔍 After filtering: {len(northbeam_df)} Northbeam rows", "info")
             
-            if meta_insights is None or northbeam_df is None:
-                st.error("❌ Failed to fetch required data")
+            # Check if we have at least one data source
+            if meta_insights is None and northbeam_df is None:
+                auto_hide_status_message("❌ Failed to fetch data from all selected sources", "error")
+                return
+            elif use_meta and meta_insights is None:
+                auto_hide_status_message("❌ Failed to fetch Meta data", "error")
                 return
             
             # Update progress - Step 3: Merging data
-            progress_placeholder.info("🔄 Step 3/4: Merging Meta and Northbeam data...")
+            sources_to_merge = []
+            if use_meta and meta_insights:
+                sources_to_merge.append("Meta")
+            if use_northbeam and northbeam_df is not None:
+                sources_to_merge.append("Northbeam")
+            
+            auto_hide_status_message(f"🔄 Step 3/4: Merging {' and '.join(sources_to_merge)} data...", "info")
             
             # Merge data into comprehensive objects
             comprehensive_ads = merge_data(northbeam_df, meta_insights, date_from, date_to)
@@ -4337,121 +3986,68 @@ def main():
             comprehensive_ads = clean_nan_values(comprehensive_ads)
             
             # Update progress - Step 4: Saving data
-            progress_placeholder.info("💾 Step 4/4: Saving comprehensive data...")
+            auto_hide_status_message("💾 Step 4/4: Saving comprehensive data...", "info")
             
             # Save comprehensive ad objects to reports directory
             if comprehensive_ads:
                 # Save to S3
-                s3_key = f"campaign-reporting/processed/comprehensive_ads/comprehensive_ads_{date_from_formatted}-{date_to_formatted}.json"
+                s3_key = f"{ROOT_DIRECTORY}/processed/comprehensive_ads/comprehensive_ads_{date_from_formatted}-{date_to_formatted}.json"
                 save_json_to_s3(comprehensive_ads, s3_key)
                 
                 # Save locally if enabled
                 if DOWNLOAD_REPORTS_LOCALLY:
-                    os.makedirs("campaign-reporting/processed/comprehensive_ads", exist_ok=True)
+                    os.makedirs(f"{ROOT_DIRECTORY}/processed/comprehensive_ads", exist_ok=True)
                     with open(comprehensive_filename, 'w') as f:
                         json.dump(comprehensive_ads, f, indent=2)
                 
                 # Store data in session state for persistence across reruns
                 st.session_state.comprehensive_ads = comprehensive_ads
                 st.session_state.report_config = {
-                    'date_from': date_from,
-                    'date_to': date_to,
+                    'date_from': date_from_str,  # Store string format for consistency
+                    'date_to': date_to_str,      # Store string format for consistency
                     'top_n': top_n,
                     'core_products_input': core_products_input,
                     'merge_ads': merge_ads,
                     'use_northbeam': use_northbeam,
+                    'use_meta': use_meta,
                     'date_from_formatted': date_from_formatted,
-                    'date_to_formatted': date_to_formatted
+                    'date_to_formatted': date_to_formatted,
+                    'fetched_data_sources': {
+                        'meta': use_meta,
+                        'northbeam': use_northbeam
+                    }
                 }
                 
-                # Final success message
-                progress_placeholder.success("✅ Report generated successfully!")
+                # Debug: Show final data
+                auto_hide_status_message(f"✅ Report generated successfully! {len(comprehensive_ads)} comprehensive ads created", "success")
+                
+                # Process existing media URLs immediately for instant display
+                comprehensive_ads = process_existing_media_urls(comprehensive_ads)
+                
+                # Start background fetch for missing media URLs in a separate thread
+                # This ensures the UI is not blocked while fetching URLs
+                import threading
+                def background_fetch():
+                    try:
+                        fetch_missing_media_urls(comprehensive_ads)
+                    except Exception as e:
+                        print(f"⚠️ Background media URL fetching failed: {e}")
+                
+                thread = threading.Thread(target=background_fetch, daemon=True)
+                thread.start()
+                print(f"🚀 Started background media URL fetching thread")
                     
             else:
-                st.error("❌ Failed to generate report. Please check the console for errors.")
+                auto_hide_status_message("❌ Failed to generate report. Please check the console for errors.", "error")
                 
         except Exception as e:
-            st.error(f"❌ Error generating report: {str(e)}")
+            auto_hide_status_message(f"❌ Error generating report: {str(e)}", "error")
             st.exception(e)
     
-    # Start background task for Meta ad creatives processing AFTER comprehensive_ads is created
-    # This runs independently and doesn't block the main display
-    if generate_button and comprehensive_ads and 'meta_insights' in st.session_state and st.session_state.meta_insights and len(st.session_state.meta_insights) > 0:
-        try:
-            # Extract ad IDs and types from meta insights
-            ad_ids = []
-            ad_types = {}
-            
-            for ad in st.session_state.meta_insights:
-                ad_id = ad.get('ad_id')
-                if ad_id:
-                    ad_ids.append(str(ad_id))
-                    # Extract ad type from ad name or use default
-                    ad_name = ad.get('ad_name', '')
-                    # Simple ad type detection from ad name
-                    ad_type = 'unknown'
-                    if 'video' in ad_name.lower():
-                        ad_type = 'video'
-                    elif 'static' in ad_name.lower():
-                        ad_type = 'static'
-                    elif 'carousel' in ad_name.lower():
-                        ad_type = 'carousel'
-                    ad_types[str(ad_id)] = ad_type
-            
-            if ad_ids:
-                
-                # Get Meta API credentials from environment or config
-                access_token = os.getenv('META_SYSTEM_USER_ACCESS_TOKEN')
-                ad_account_id = os.getenv('META_AD_ACCOUNT_ID')
-                page_id = os.getenv('META_PAGE_ID')  # Optional
-                
-                if access_token and ad_account_id:
-                    # Start background processing
-                    def background_process_creatives():
-                        try:
-                            processed_data = process_meta_ad_urls(
-                                ad_ids=ad_ids,
-                                ad_types=ad_types,
-                                access_token=access_token,
-                                ad_account_id=ad_account_id,
-                                date_from=date_from,
-                                date_to=date_to,
-                                page_id=page_id
-                            )
-                            print(f"✅ Background Meta ad creatives processing completed: {len(processed_data)} ads processed")
-                            # Clear the background task status when complete
-                            if 'background_task_status' in st.session_state:
-                                del st.session_state.background_task_status
-                        except Exception as e:
-                            print(f"❌ Background Meta ad creatives processing failed: {e}")
-                            # Clear the background task status on error too
-                            if 'background_task_status' in st.session_state:
-                                del st.session_state.background_task_status
-                    
-                    # Start the background task
-                    import threading
-                    background_thread = threading.Thread(target=background_process_creatives)
-                    background_thread.daemon = True
-                    background_thread.start()
-                    
-                    print(f"🔄 Background Meta ad creatives processing started for {len(ad_ids)} ads")
-                    
-                    # Store background task status in session state
-                    st.session_state.background_task_status = f"🎬 Background task started: Processing Meta ad creatives for {len(ad_ids)} ads"
-                else:
-                    print("⚠️ Meta API credentials not found. Skipping ad creatives processing.")
-                    print("Set META_SYSTEM_USER_ACCESS_TOKEN and META_AD_ACCOUNT_ID environment variables to enable this feature.")
-                    st.warning("⚠️ Meta API credentials not found. Set META_SYSTEM_USER_ACCESS_TOKEN and META_AD_ACCOUNT_ID environment variables to enable ad creatives processing.")
-            else:
-                print("⚠️ No ad IDs found in meta insights. Skipping ad creatives processing.")
-                st.info("ℹ️ No ad IDs found in meta insights. Skipping ad creatives processing.")
-            
-        except Exception as e:
-            print(f"❌ Error starting background Meta ad creatives processing: {e}")
-            st.warning(f"⚠️ Background Meta ad creatives processing failed: {str(e)}")
-            # Continue with main processing even if background task fails
+    # Background ad creatives processing removed - now using preview URLs directly
     
     # Display report and Google Doc generation (using session state data)
+    
     if st.session_state.comprehensive_ads and st.session_state.report_config:
         # Check if cached data matches current date range
         config = st.session_state.report_config
@@ -4459,12 +4055,16 @@ def main():
         current_date_to = date_to
         
         # Validate that cached data matches current date range
-        if (config.get('date_from') != current_date_from or 
-            config.get('date_to') != current_date_to):
+        # Convert current dates to strings for comparison with cached data
+        current_date_from_str = current_date_from.strftime("%Y-%m-%d")
+        current_date_to_str = current_date_to.strftime("%Y-%m-%d")
+        
+        if (config.get('date_from') != current_date_from_str or 
+            config.get('date_to') != current_date_to_str):
             # Clear cached data if date range doesn't match
             st.session_state.comprehensive_ads = None
             st.session_state.report_config = None
-            st.info("🔄 Date range changed. Please click 'Generate Report' to fetch fresh data for the new date range.")
+            auto_hide_status_message("🔄 Date range changed. Please click 'Generate Report' to fetch fresh data for the new date range.", "info")
             return
         
         # Display context information in a clean, minimal layout
@@ -4481,9 +4081,58 @@ def main():
                 st.caption(f"🔗 Merge Ads: {merge_status}")
             
             with col3:
-                data_source_display = "Northbeam" if use_northbeam else "Meta"
-                data_source_color = "🟢" if use_northbeam else "🔵"
-                st.caption(f"{data_source_color} Data Source: {data_source_display}")
+                # Data source selection for CURRENT report viewing
+                # This dropdown shows what data is available from the fetched report                
+                # Create dynamic data source dropdown based on what data was actually fetched
+                available_sources = []
+                fetched_sources = config.get('fetched_data_sources', {})
+                if fetched_sources.get('meta', True):
+                    available_sources.append("Meta")
+                if fetched_sources.get('northbeam', True):
+                    available_sources.append("Northbeam")
+                
+                # Default to Northbeam if available, otherwise first available source
+                if 'current_view_source' not in st.session_state:
+                    if "Northbeam" in available_sources:
+                        st.session_state.current_view_source = "Northbeam"
+                    else:
+                        st.session_state.current_view_source = available_sources[0] if available_sources else "Meta"
+                
+                # Create dropdown for data source selection
+                if len(available_sources) > 1:
+                    # Use columns to put label and dropdown on same line
+                    label_col, dropdown_col = st.columns([1, 2])
+                    with label_col:
+                        st.caption(f"🟢 Data Source:")
+
+                    with dropdown_col:
+                        selected_source = st.selectbox(
+                            "Select data source",
+                            options=available_sources,
+                            index=available_sources.index(st.session_state.current_view_source) if st.session_state.current_view_source in available_sources else 0,
+                            key="data_source_selector",
+                            label_visibility="collapsed"
+                        )
+                    
+                    # Update session state when selection changes
+                    if selected_source != st.session_state.current_view_source:
+                        st.session_state.current_view_source = selected_source
+                        st.rerun()
+                    
+                    data_source_display = selected_source
+                    data_source_color = "🟢" if selected_source == "Northbeam" else "🔵"
+                else:
+                    # Only one source available, show as static text
+                    data_source_display = available_sources[0] if available_sources else "Meta"
+                    data_source_color = "🟢" if data_source_display == "Northbeam" else "🔵"
+                    
+                    # Use columns to put label and value on same line
+                    label_col, value_col = st.columns([1, 2])
+                    with label_col:
+                        st.caption(f"🟢 Data Source:")
+
+                    with value_col:
+                        st.caption(f"{data_source_display}")
             
             with col4:
                 # Google Doc generation button with unique key
@@ -4506,7 +4155,10 @@ def main():
                 if st.session_state.get('is_generating_google_doc', False):
                     with st.spinner(""):
                         try:
-                            # Generate markdown report
+                            # Generate markdown report using the currently selected view source
+                            current_view_source = st.session_state.get('current_view_source', 'Meta')
+                            use_northbeam_for_report = current_view_source == "Northbeam"
+                            
                             markdown_content = generate_markdown_report(
                                 st.session_state.comprehensive_ads,
                                 config['date_from'],
@@ -4514,18 +4166,19 @@ def main():
                                 config['top_n'],
                                 config['core_products_input'],
                                 config['merge_ads'],
-                                config['use_northbeam']
+                                use_northbeam_for_report
                             )
                             
                             # Save markdown file to S3 and locally (if enabled)
-                            date_from_formatted = config['date_from'].replace('-', '')
-                            date_to_formatted = config['date_to'].replace('-', '')
+                            # Use stored formatted dates directly
+                            date_from_formatted = config['date_from_formatted']
+                            date_to_formatted = config['date_to_formatted']
                             
                             # S3 path
-                            s3_key = f"campaign-reporting/reports/campaign_analysis_report_{date_from_formatted}-{date_to_formatted}.md"
+                            s3_key = f"{ROOT_DIRECTORY}/reports/campaign_analysis_report_{date_from_formatted}-{date_to_formatted}.md"
                             
                             # Local path (same directory structure as S3)
-                            local_filename = f"campaign-reporting/reports/campaign_analysis_report_{date_from_formatted}-{date_to_formatted}.md"
+                            local_filename = f"{ROOT_DIRECTORY}/reports/campaign_analysis_report_{date_from_formatted}-{date_to_formatted}.md"
                             
                             # Save to S3 (always overwrite)
                             try:
@@ -4542,7 +4195,7 @@ def main():
                             
                             # Save locally if enabled (always overwrite)
                             if DOWNLOAD_REPORTS_LOCALLY:
-                                os.makedirs("campaign-reporting/reports", exist_ok=True)
+                                os.makedirs(f"{ROOT_DIRECTORY}/reports", exist_ok=True)
                                 with open(local_filename, 'w') as f:
                                     f.write(markdown_content)
                                 print(f"💾 Saved markdown report locally: {local_filename}")
@@ -4550,7 +4203,7 @@ def main():
                                 print(f"💾 Markdown report saved to S3 only (local saving disabled)")
                             
                             # Store the local filename for download button
-                            report_filename = local_filename if DOWNLOAD_REPORTS_LOCALLY else f"reports/campaign_analysis_report_{date_from_formatted}-{date_to_formatted}.md"
+                            report_filename = local_filename if DOWNLOAD_REPORTS_LOCALLY else f"{ROOT_DIRECTORY}/reports/campaign_analysis_report_{date_from_formatted}-{date_to_formatted}.md"
                             
                             # Export to Google Doc
                             doc_title = f"Thrive Causemetics Campaign Analysis {config['date_from']} to {config['date_to']}"
@@ -4565,11 +4218,11 @@ def main():
                                 st.session_state.is_generating_google_doc = False
                                 # No status message - keep UI clean
                             else:
-                                st.error("❌ Failed to create Google Doc")
+                                auto_hide_status_message("❌ Failed to create Google Doc", "error")
                                 st.session_state.is_generating_google_doc = False
                                 
                         except Exception as e:
-                            st.error(f"❌ Error creating Google Doc: {str(e)}")
+                            auto_hide_status_message(f"❌ Error creating Google Doc: {str(e)}", "error")
                             st.exception(e)
                             st.session_state.is_generating_google_doc = False
                 
@@ -4611,119 +4264,12 @@ def main():
         # Welcome screen
         st.write("""
         **To get started:**\n
-        ⬅️ Select Date Range and configure settings in the sidebar
+        ⬅️ Select Date Range, Configure Settings, and Generate Report in the sidebar
         """)
         
 
-# Global cache for processed data to avoid repeated S3 calls
-_processed_data_cache = None
-
-def get_master_urls_filename():
-    """Generate master URLs filename with current date"""
-    current_date = datetime.now().strftime("%Y%m%d")
-    return f"campaign-reporting/processed/master_urls/master_urls_{current_date}.json"
-
-def get_processed_data_cache():
-    """Get cached processed data, loading from S3/local if needed"""
-    global _processed_data_cache
-    
-    # Return cached data if available
-    if _processed_data_cache is not None:
-        print(f"✅ Using cached processed data ({len(_processed_data_cache)} ads)")
-        return _processed_data_cache
-    
-    try:
-        # Try to find the most recent master URLs file
-        try:
-            # List all master URLs files in S3
-            s3_client = get_s3_client()
-            response = s3_client.list_objects_v2(
-                Bucket=S3_BUCKET,
-                Prefix="campaign-reporting/processed/master_urls/master_urls_",
-                MaxKeys=100
-            )
-            
-            if 'Contents' in response:
-                # Sort by date (newest first)
-                files = sorted(
-                    [obj['Key'] for obj in response['Contents'] if obj['Key'].endswith('.json')],
-                    reverse=True
-                )
-                
-                if files:
-                    # Load the most recent file
-                    most_recent_key = files[0]
-                    try:
-                        processed_data = load_json_from_s3(most_recent_key)
-                        if processed_data:
-                            _processed_data_cache = processed_data
-                            return processed_data
-                    except Exception as e:
-                        print(f"⚠️ Error loading most recent master URLs from S3: {e}")
-            
-        except Exception as e:
-            print(f"⚠️ Error listing master URLs files in S3: {e}")
-        
-        # Fallback to local files (only if DOWNLOAD_REPORTS_LOCALLY is True)
-        if DOWNLOAD_REPORTS_LOCALLY:
-            try:
-                local_dir = "campaign-reporting/processed/master_urls"
-                if os.path.exists(local_dir):
-                    files = [f for f in os.listdir(local_dir) if f.startswith("master_urls_") and f.endswith(".json")]
-                    if files:
-                        # Sort by date (newest first)
-                        files.sort(reverse=True)
-                        most_recent_file = os.path.join(local_dir, files[0])
-                        with open(most_recent_file, 'r') as f:
-                            processed_data = json.load(f)
-                            print(f"✅ Loaded most recent master URLs locally: {most_recent_file}")
-                            _processed_data_cache = processed_data
-                            return processed_data
-            except Exception as e:
-                print(f"⚠️ Error loading local master URLs: {e}")
-        else:
-            print("📁 Skipping local file lookup (DOWNLOAD_REPORTS_LOCALLY = False)")
-        
-        print("❌ No processed data found in S3 or local storage")
-        return None
-        
-    except Exception as e:
-        print(f"Error loading processed data: {e}")
-        return None
-
-# Global flag to control whether to use cached files
-USE_CACHED_FILES = True
-
-# Global cache for processed data to avoid repeated S3 calls
-_PROCESSED_DATA_CACHE = None
-_CACHE_LOADED = False
-
-def set_use_cached_files(value: bool):
-    """Set whether to use cached files for meta_insights and northbeam data"""
-    global USE_CACHED_FILES
-    USE_CACHED_FILES = value
-    print(f"🔄 Use cached files set to: {value}")
-
-def _get_cached_processed_data():
-    """Get cached processed data, loading it once if needed"""
-    global _PROCESSED_DATA_CACHE, _CACHE_LOADED
-    
-    if not _CACHE_LOADED:
-        _PROCESSED_DATA_CACHE = get_processed_data_cache()
-        _CACHE_LOADED = True
-        if _PROCESSED_DATA_CACHE:
-            print(f"✅ Loaded processed data cache ({len(_PROCESSED_DATA_CACHE)} ads)")
-        else:
-            print("⚠️ No processed data available")
-    
-    return _PROCESSED_DATA_CACHE
-
-def clear_processed_data_cache():
-    """Clear the processed data cache to force reload"""
-    global _PROCESSED_DATA_CACHE, _CACHE_LOADED
-    _PROCESSED_DATA_CACHE = None
-    _CACHE_LOADED = False
-    print("🔄 Cleared processed data cache")
+# ===== CACHE MANAGEMENT =====
+# Note: Cache management is now handled by media_urls_manager and Streamlit session state
 
 def list_s3_reports():
     """List all markdown reports in S3"""
@@ -4731,7 +4277,7 @@ def list_s3_reports():
         s3_client = get_s3_client()
         response = s3_client.list_objects_v2(
             Bucket=S3_BUCKET,
-            Prefix="campaign-reporting/reports/",
+            Prefix=f"{ROOT_DIRECTORY}/reports/",
             MaxKeys=100
         )
         
@@ -4770,64 +4316,45 @@ def list_s3_reports():
 
 def get_ad_url(ad_id: str, ad_type: str = None) -> tuple[str, str]:
     """
-    Get URL from meta_adcreatives_processed.json based on ad_id and ad_type
-    Returns both primary URL (matching ad type) and thumbnail URL
+    Get preview URL and thumbnail URL from media URLs cache based on ad_id.
+    Now uses the media_urls_manager system for better performance and caching.
     
     Args:
         ad_id: The ad ID to look up
-        ad_type: The ad type (video, static, carousel) - if None or "Unknown", will try all URL types
+        ad_type: The ad type (not used in media URLs approach, kept for compatibility)
     
     Returns:
-        Tuple of (primary_url, thumbnail_url) where primary_url matches the ad type
+        Tuple of (preview_url, thumbnail_url)
     """
     try:
-        processed_data = _get_cached_processed_data()
+        # Load media URLs cache from media_urls_manager
+        media_cache = load_media_urls_cache()
         
-        if processed_data is None:
+        if not media_cache:
             return "", ""
         
         ad_id_str = str(ad_id)
-        if ad_id_str not in processed_data:
+        if ad_id_str not in media_cache:
             return "", ""
         
-        ad_data = processed_data[ad_id_str]
+        cached_data = media_cache[ad_id_str]
         
-        # Get thumbnail URL - prefer high-quality video thumbnail if available
-        thumbnail_url = ad_data.get("video_thumbnail_url", "") or ad_data.get("thumbnail_url", "")
+        if isinstance(cached_data, dict):
+            # New format - preview URL and thumbnail
+            preview_url = cached_data.get('preview_url', '')
+            thumbnail_url = cached_data.get('thumbnail_url', '')
+        elif isinstance(cached_data, str):
+            # Old format - just preview URL
+            preview_url = cached_data
+            thumbnail_url = ''
+        else:
+            preview_url = ''
+            thumbnail_url = ''
         
-        # Get primary URL based on ad type
-        primary_url = ""
-        
-        if ad_type and ad_type.lower() != "unknown":
-            # For video ads, prefer permalink_url, then source_url
-            if ad_type.lower() in ["video", "carousel"]:
-                if ad_data.get("video_permalink_url"):
-                    primary_url = ad_data["video_permalink_url"]
-                elif ad_data.get("video_source_url"):
-                    primary_url = ad_data["video_source_url"]
-            
-            # For static/image ads, prefer image permalink_url, then image_url
-            elif ad_type.lower() in ["static", "image"]:
-                if ad_data.get("image_permalink_url"):
-                    primary_url = ad_data["image_permalink_url"]
-                elif ad_data.get("image_url"):
-                    primary_url = ad_data["image_url"]
-        
-        # If no type-specific URL found, try all URL types in order of preference
-        if not primary_url:
-            if ad_data.get("video_permalink_url"):
-                primary_url = ad_data["video_permalink_url"]
-            elif ad_data.get("video_source_url"):
-                primary_url = ad_data["video_source_url"]
-            elif ad_data.get("image_permalink_url"):
-                primary_url = ad_data["image_permalink_url"]
-            elif ad_data.get("image_url"):
-                primary_url = ad_data["image_url"]
-        
-        return primary_url, thumbnail_url
+        return preview_url, thumbnail_url
         
     except Exception as e:
-        print(f"Error getting URL for ad {ad_id}: {e}")
+        print(f"Error getting media URLs for ad {ad_id}: {e}")
         return "", ""
 
 def detect_ad_type_from_name(ad_name: str) -> str:
@@ -4850,6 +4377,26 @@ def detect_ad_type_from_name(ad_name: str) -> str:
         return 'carousel'
     else:
         return 'unknown'
+
+# ===== PREVIEW URL CACHING FUNCTIONS =====
+# Note: These functions have been replaced by media_urls_manager functions
+# - get_most_recent_cache_file() -> media_urls_manager.get_most_recent_cache_file()
+# - load_preview_urls_cache() -> load_media_urls_cache()
+# - save_preview_urls_cache() -> save_media_urls_cache() (handled internally by media_urls_manager)
+
+# ===== PREVIEW URL CACHING FUNCTIONS =====
+# Note: These functions have been replaced by media_urls_manager functions
+# - load_preview_urls_cache() -> load_media_urls_cache()
+# - save_preview_urls_cache() -> save_media_urls_cache() (handled internally by media_urls_manager)
+
+# ===== BACKGROUND URL FETCHING SYSTEM =====
+# Note: This functionality has been replaced by media_urls_manager.fetch_missing_media_urls()
+# The function is now called directly in the main function for better integration
+
+# ===== STANDALONE FUNCTION FOR EXTERNAL USE =====
+# ===== STANDALONE FUNCTION FOR EXTERNAL USE =====
+# Note: This function has been replaced by media_urls_manager.get_preview_urls_for_ads()
+# Use the media_urls_manager module for all media URL operations
 
 if __name__ == "__main__":
     main() 
