@@ -298,7 +298,7 @@ def generate_markdown_report(ad_objects, date_from, date_to, top_n=5, core_produ
             # Create hyperlink for ad name if URL exists
             ad_name_display = ad['ad_name']
             if ad['ad_url']:
-                ad_name_display = f"[{ad['ad_name']}]({ad['ad_url']})"
+                ad_name_display = f'<a href="{ad["ad_url"]}">{ad["ad_name"]}</a>'
             
             report += f"| {i} | {ad_name_display} | {ad['campaign']} | {ad['product']} | {ad['ad_type']} | {ad['creator']} | {ad['agency']} | ${ad['spend']:,.2f} | {ad['roas']:.2f}x | {ad['ctr']:.2f}% | ${ad['cpm']:.2f} | {ad['thumbstop']:.1f}% | ${ad['aov']:.2f} |\n"
         
@@ -525,7 +525,7 @@ def generate_markdown_report(ad_objects, date_from, date_to, top_n=5, core_produ
                     # Create hyperlink for ad name if URL exists
                     ad_name_display = ad['ad_name']
                     if ad['ad_url']:
-                        ad_name_display = f"[{ad['ad_name']}]({ad['ad_url']})"
+                        ad_name_display = f'<a href="{ad["ad_url"]}">{ad["ad_name"]}</a>'
                     
                     report += f"| {i} | {ad_name_display} | ${ad['spend']:,.2f} | {ad['roas']:.2f}x | {ad['ctr']:.2f}% | ${ad['cpm']:.2f} | {ad['thumbstop']:.1f}% | ${ad['aov']:.2f} |\n"
                 
