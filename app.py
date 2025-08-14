@@ -69,10 +69,9 @@ NORTHBEAM_BASE_URL = "https://api.northbeam.io/v1"
 
 # Northbeam export configuration
 NORTHBEAM_MAX_RETRIES = 3      # 3 retries default
-NORTHBEAM_RETRY_DELAY = 10         # Wait between retry attempts (10 seconds)  
-
-NORTHBEAM_POLL_INTERVAL = 10
-NORTHBEAM_BASE_DELAY = 30          # Base delay for all retries
+NORTHBEAM_POLL_INTERVAL = 10       # How often to poll during export download (seconds)
+NORTHBEAM_RETRY_DELAY = 30         # Wait time between retry attempts (seconds)
+NORTHBEAM_POLLING_TIMEOUT = 15     # Base timeout for polling attempts (seconds)
 
 META_REQUEST_TIMEOUT = 30            # Timeout for Meta API requests
 META_RATE_LIMIT_DELAY = 0.5         # Delay between Meta API requests
@@ -810,7 +809,7 @@ def create_northbeam_export(start_date, end_date):
                 print(f"✅ Export created successfully! ID: {export_id}")
                 return export_id
             elif response.status_code == 429:
-                delay = NORTHBEAM_BASE_DELAY  # Consistent delay
+                delay = NORTHBEAM_RETRY_DELAY  # Consistent delay
                 print(f"❌ Rate limit exceeded (429) on attempt {attempt + 1}: {response.text}")
                 print(f"⏱️ Waiting {delay} seconds before retrying...")
                 time.sleep(delay)
@@ -820,7 +819,7 @@ def create_northbeam_export(start_date, end_date):
                 # Don't retry on 400 errors as they're likely configuration issues
                 return None
             elif response.status_code >= 500:
-                delay = NORTHBEAM_BASE_DELAY  # Consistent delay
+                delay = NORTHBEAM_RETRY_DELAY  # Consistent delay
                 print(f"❌ Server error ({response.status_code}) on attempt {attempt + 1}: {response.text}")
                 print(f"⏱️ Waiting {delay} seconds before retrying...")
                 time.sleep(delay)
@@ -831,13 +830,13 @@ def create_northbeam_export(start_date, end_date):
                 return None
                 
         except requests.exceptions.Timeout:
-            delay = NORTHBEAM_BASE_DELAY  # Consistent delay
+            delay = NORTHBEAM_RETRY_DELAY  # Consistent delay
             print(f"⏰ Request timeout on attempt {attempt + 1}")
             print(f"⏱️ Waiting {delay} seconds before retrying...")
             time.sleep(delay)
             continue
         except requests.exceptions.RequestException as e:
-            delay = NORTHBEAM_BASE_DELAY  # Consistent delay
+            delay = NORTHBEAM_RETRY_DELAY  # Consistent delay
             print(f"❌ Request error on attempt {attempt + 1}: {e}")
             print(f"⏱️ Waiting {delay} seconds before retrying...")
             time.sleep(delay)
@@ -893,7 +892,7 @@ def poll_northbeam_export_status(export_id, timeout_seconds=20, poll_interval=5)
                     
             elif response.status_code == 429:
                 consecutive_errors += 1
-                wait_time = NORTHBEAM_BASE_DELAY  # Consistent delay
+                wait_time = NORTHBEAM_RETRY_DELAY  # Consistent delay
                 print(f"  ⚠️ Rate limit hit during polling (attempt {consecutive_errors}), waiting {wait_time} seconds...")
                 time.sleep(wait_time)
                 continue
@@ -1019,19 +1018,19 @@ def fetch_northbeam_data(date_from=None, date_to=None):
     
     print(f"\n🔄 Fetching Northbeam data for {date_from} to {date_to}...")
     
-    # Consistent delay configuration: (poll_interval, timeout)
-    backoff_config = [
-        (NORTHBEAM_POLL_INTERVAL, 15),                    # 1st attempt: every 10s for 15s
-        (NORTHBEAM_POLL_INTERVAL, 30),                    # 2nd attempt: every 10s for 30s  
-        (NORTHBEAM_POLL_INTERVAL, 45)                     # 3rd attempt: every 10s for 45s
+    # Polling configuration: (poll_interval, timeout) for each attempt
+    polling_config = [
+        (NORTHBEAM_POLL_INTERVAL, NORTHBEAM_POLLING_TIMEOUT),                    # 1st attempt: poll every [interval] for [timemout]
+        (NORTHBEAM_POLL_INTERVAL, NORTHBEAM_POLLING_TIMEOUT * 2),  
+        (NORTHBEAM_POLL_INTERVAL, NORTHBEAM_POLLING_TIMEOUT * 3) 
     ]
     
     # Try up to 3 times with consistent delays
     for attempt in range(1, NORTHBEAM_MAX_RETRIES + 1):
         print(f"📊 Attempt {attempt}/{NORTHBEAM_MAX_RETRIES}")
         
-        # Get backoff settings for this attempt
-        poll_interval, timeout = backoff_config[attempt - 1]
+        # Get polling settings for this attempt
+        poll_interval, timeout = polling_config[attempt - 1]
         print(f"⏱️  Polling: every {poll_interval}s for {timeout}s total")
         
         # Create export
