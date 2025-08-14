@@ -3717,11 +3717,6 @@ def main():
     # Sidebar with configuration
     st.sidebar.header("⚙️ Configuration")
     
-    # Add logout button at the top of sidebar
-    show_logout_button()
-    
-    st.sidebar.markdown("---")
-    
     # Editable configuration
     st.sidebar.subheader("📅 Date Range")
     
@@ -3881,7 +3876,9 @@ def main():
             st.session_state.status_messages = {}
             st.rerun()
     
-
+    # Add logout button at the bottom of sidebar
+    st.sidebar.markdown("---")
+    show_logout_button()
     
 
     
