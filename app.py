@@ -3523,12 +3523,9 @@ def display_campaign_explorer_tab(ad_objects, top_n=DEFAULT_TOP_N, core_products
                         display_ads_df_formatted['Link Clicks'] = display_ads_df_formatted['Link Clicks'].apply(format_large_number)
                         display_ads_df_formatted['Video Views'] = display_ads_df_formatted['Video Views'].apply(format_large_number)
                         
-                        # Create display dataframe with thumbnail column
-                        display_ads_df = display_ads_df.copy()
-                        
                         # Use LinkColumn for clickable URLs
                         st.dataframe(
-                            display_ads_df,
+                            display_ads_df_formatted,
                             column_config={
                                 "Thumbnail": st.column_config.ImageColumn(
                                     "Thumbnail",
@@ -3685,9 +3682,9 @@ def display_campaign_explorer_tab(ad_objects, top_n=DEFAULT_TOP_N, core_products
                         display_creators_df_formatted['Thumbstop'] = display_creators_df_formatted['Thumbstop'].apply(format_percentage)
                         display_creators_df_formatted['AOV'] = display_creators_df_formatted['AOV'].apply(format_currency)
                         
-                        # Use raw numbers for proper sorting, let Streamlit handle display
+                        # Use formatted numbers for display
                         st.dataframe(
-                            display_creators_df,
+                            display_creators_df_formatted,
                             column_config={
                                 "Thumbnail": st.column_config.ImageColumn(
                                     "Thumbnail",
@@ -3719,9 +3716,9 @@ def display_campaign_explorer_tab(ad_objects, top_n=DEFAULT_TOP_N, core_products
                             all_creators_formatted['Thumbstop'] = all_creators_formatted['Thumbstop'].apply(format_percentage)
                             all_creators_formatted['AOV'] = all_creators_formatted['AOV'].apply(format_currency)
                             
-                            # Use raw numbers for proper sorting, let Streamlit handle display
+                            # Use formatted numbers for display
                             st.dataframe(
-                                all_creators_df,
+                                all_creators_formatted,
                                 column_config={
                                     "Thumbnail": st.column_config.ImageColumn(
                                         "Thumbnail",
