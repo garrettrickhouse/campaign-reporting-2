@@ -71,7 +71,7 @@ NORTHBEAM_BASE_URL = "https://api.northbeam.io/v1"
 NORTHBEAM_MAX_RETRIES = 3      # 3 retries default
 NORTHBEAM_POLL_INTERVAL = 10       # How often to poll during export download (seconds)
 NORTHBEAM_RETRY_DELAY = 30         # Wait time between retry attempts (seconds)
-NORTHBEAM_POLLING_TIMEOUT = 15     # Base timeout for polling attempts (seconds)
+NORTHBEAM_POLLING_TIMEOUT = 120    # Base timeout for polling attempts (2 minutes)
 
 META_REQUEST_TIMEOUT = 30            # Timeout for Meta API requests
 META_RATE_LIMIT_DELAY = 0.5         # Delay between Meta API requests
@@ -809,20 +809,18 @@ def create_northbeam_export(start_date, end_date):
                 print(f"✅ Export created successfully! ID: {export_id}")
                 return export_id
             elif response.status_code == 429:
-                delay = NORTHBEAM_RETRY_DELAY  # Consistent delay
                 print(f"❌ Rate limit exceeded (429) on attempt {attempt + 1}: {response.text}")
-                print(f"⏱️ Waiting {delay} seconds before retrying...")
-                time.sleep(delay)
+                print(f"⏱️ Waiting {NORTHBEAM_RETRY_DELAY} seconds before retrying...")
+                time.sleep(NORTHBEAM_RETRY_DELAY)
                 continue
             elif response.status_code == 400:
                 print(f"❌ Bad request (400): {response.text}")
                 # Don't retry on 400 errors as they're likely configuration issues
                 return None
             elif response.status_code >= 500:
-                delay = NORTHBEAM_RETRY_DELAY  # Consistent delay
                 print(f"❌ Server error ({response.status_code}) on attempt {attempt + 1}: {response.text}")
-                print(f"⏱️ Waiting {delay} seconds before retrying...")
-                time.sleep(delay)
+                print(f"⏱️ Waiting {NORTHBEAM_RETRY_DELAY} seconds before retrying...")
+                time.sleep(NORTHBEAM_RETRY_DELAY)
                 continue
             else:
                 print(f"❌ Export creation failed: {response.status_code}")
@@ -830,16 +828,14 @@ def create_northbeam_export(start_date, end_date):
                 return None
                 
         except requests.exceptions.Timeout:
-            delay = NORTHBEAM_RETRY_DELAY  # Consistent delay
             print(f"⏰ Request timeout on attempt {attempt + 1}")
-            print(f"⏱️ Waiting {delay} seconds before retrying...")
-            time.sleep(delay)
+            print(f"⏱️ Waiting {NORTHBEAM_RETRY_DELAY} seconds before retrying...")
+            time.sleep(NORTHBEAM_RETRY_DELAY)
             continue
         except requests.exceptions.RequestException as e:
-            delay = NORTHBEAM_RETRY_DELAY  # Consistent delay
             print(f"❌ Request error on attempt {attempt + 1}: {e}")
-            print(f"⏱️ Waiting {delay} seconds before retrying...")
-            time.sleep(delay)
+            print(f"⏱️ Waiting {NORTHBEAM_RETRY_DELAY} seconds before retrying...")
+            time.sleep(NORTHBEAM_RETRY_DELAY)
             continue
     
     print(f"❌ Export creation failed after {NORTHBEAM_MAX_RETRIES} attempts")
@@ -1032,6 +1028,7 @@ def fetch_northbeam_data(date_from=None, date_to=None):
         # Get polling settings for this attempt
         poll_interval, timeout = polling_config[attempt - 1]
         print(f"⏱️  Polling: every {poll_interval}s for {timeout}s total")
+        print(f"⏱️  Total timeout: {timeout} seconds ({timeout/60:.1f} minutes)")
         
         # Create export
         export_id = create_northbeam_export(date_from, date_to)
