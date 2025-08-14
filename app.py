@@ -39,7 +39,7 @@ load_dotenv()
 # User Variables Config
 # MERGE_ADS_WITH_SAME_NAME = True
 # USE_NORTHBEAM_DATA = True  # Set to True to use Northbeam data for spend/revenue metrics
-DOWNLOAD_REPORTS_LOCALLY = False  # Set to True to save all fetched/processed data locally (in addition to S3)
+DOWNLOAD_REPORTS_LOCALLY = True  # Set to True to save all fetched/processed data locally (in addition to S3)
 # Note: When DOWNLOAD_REPORTS_LOCALLY = False, files are only saved to S3, saving disk space
 
 # Root directory for S3 storage (updated to match actual S3 bucket structure)
@@ -2505,6 +2505,10 @@ def display_summary_tab(ad_objects, top_n=DEFAULT_TOP_N):
     # Create display dataframe with thumbnail column
     display_df = top_ads_df.copy()
     
+    # Create a unique key that changes when data source changes to force table refresh
+    current_view_source = st.session_state.get('current_view_source', 'Meta')
+    summary_table_key = f"summary_table_{current_view_source}_{len(ads_df)}"
+    
     st.dataframe(
         display_df,
         column_config={
@@ -2519,13 +2523,17 @@ def display_summary_tab(ad_objects, top_n=DEFAULT_TOP_N):
             )
         },
         use_container_width=True,
-        hide_index=True
+        hide_index=True,
+        key=summary_table_key
     )
     
     # Show all ads in expander
     with st.expander(f"📊 Show all {len(ads_df)} ads"):
         # Create display dataframe with thumbnail column
         display_ads_df = ads_df.copy()
+        
+        # Create a unique key for the expander table
+        expander_table_key = f"expander_table_{current_view_source}_{len(ads_df)}"
         
         st.dataframe(
             display_ads_df,
@@ -2541,7 +2549,8 @@ def display_summary_tab(ad_objects, top_n=DEFAULT_TOP_N):
                 )
             },
             use_container_width=True,
-            hide_index=True
+            hide_index=True,
+            key=expander_table_key
         )
     
     st.markdown("---")
@@ -3667,6 +3676,10 @@ def display_product_creator_explorer_tab(ad_objects):
         # Create display dataframe with thumbnail column
         display_df_formatted = display_df_formatted.copy()
         
+        # Create a unique key that changes when data source changes to force table refresh
+        current_view_source = st.session_state.get('current_view_source', 'Meta')
+        table_key = f"ads_table_{current_view_source}_{len(filtered_ads)}"
+        
         st.dataframe(
             display_df_formatted,
             column_config={
@@ -3681,7 +3694,8 @@ def display_product_creator_explorer_tab(ad_objects):
                 )
             },
             use_container_width=True,
-            hide_index=True
+            hide_index=True,
+            key=table_key
         )
         
 
