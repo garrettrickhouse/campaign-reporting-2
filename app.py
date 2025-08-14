@@ -2478,17 +2478,17 @@ def display_summary_tab(ad_objects, top_n=DEFAULT_TOP_N):
             'Product': ad['metadata'].get('product', 'Unknown'),
             'Creator': ad['metadata'].get('creator', 'Unknown'),
             'Agency': ad['metadata'].get('agency', 'Unknown'),
-            'Spend': get_metric_value(ad, 'spend'),
-            'Revenue': get_metric_value(ad, 'attributed_rev'),
-            'Transactions': get_metric_value(ad, 'transactions'),
-            'Impressions': get_metric_value(ad, 'impressions'),
-            'Link Clicks': get_metric_value(ad, 'meta_link_clicks'),
-            'Video Views': get_metric_value(ad, 'meta_3s_video_views'),
-            'ROAS': get_metric_value(ad, 'roas'),
-            'CTR': (get_metric_value(ad, 'meta_link_clicks') / get_metric_value(ad, 'impressions') * 100) if get_metric_value(ad, 'impressions') > 0 else 0,
-            'CPM': (get_metric_value(ad, 'spend') / get_metric_value(ad, 'impressions') * 1000) if get_metric_value(ad, 'impressions') > 0 else 0,
-            'Thumbstop': (get_metric_value(ad, 'meta_3s_video_views') / get_metric_value(ad, 'impressions') * 100) if get_metric_value(ad, 'impressions') > 0 else 0,
-            'AOV': get_metric_value(ad, 'attributed_rev') / get_metric_value(ad, 'transactions') if get_metric_value(ad, 'transactions') > 0 else 0
+            'Spend': get_metric_value(ad, 'spend', data_source),
+            'Revenue': get_metric_value(ad, 'attributed_rev', data_source),
+            'Transactions': get_metric_value(ad, 'transactions', data_source),
+            'Impressions': get_metric_value(ad, 'impressions', data_source),
+            'Link Clicks': get_metric_value(ad, 'meta_link_clicks', data_source),
+            'Video Views': get_metric_value(ad, 'meta_3s_video_views', data_source),
+            'ROAS': get_metric_value(ad, 'roas', data_source),
+            'CTR': (get_metric_value(ad, 'meta_link_clicks', data_source) / get_metric_value(ad, 'impressions', data_source) * 100) if get_metric_value(ad, 'impressions', data_source) > 0 else 0,
+            'CPM': (get_metric_value(ad, 'spend', data_source) / get_metric_value(ad, 'impressions', data_source) * 1000) if get_metric_value(ad, 'impressions', data_source) > 0 else 0,
+            'Thumbstop': (get_metric_value(ad, 'meta_3s_video_views', data_source) / get_metric_value(ad, 'impressions', data_source) * 100) if get_metric_value(ad, 'impressions', data_source) > 0 else 0,
+            'AOV': get_metric_value(ad, 'attributed_rev', data_source) / get_metric_value(ad, 'transactions', data_source) if get_metric_value(ad, 'transactions', data_source) > 0 else 0
         })
 
     
@@ -3601,6 +3601,10 @@ def display_product_creator_explorer_tab(ad_objects):
         # Display filtered ads table
         st.subheader(f"📋 Ads Table ({len(filtered_ads)} ads)")
         
+        # Get current data source for metric calculations
+        current_view_source = st.session_state.get('current_view_source', 'Meta')
+        data_source = 'northbeam' if current_view_source == 'Northbeam' else 'meta'
+        
         # Create ads dataframe
         ads_data = []
         for ad in filtered_ads:
@@ -3618,17 +3622,17 @@ def display_product_creator_explorer_tab(ad_objects):
                 'Product': ad['metadata'].get('product', 'Unknown'),
                 'Creator': ad['metadata'].get('creator', 'Unknown'),
                 'Agency': ad['metadata'].get('agency', 'Unknown'),
-                'Spend': get_metric_value(ad, 'spend'),
-                'Revenue': get_metric_value(ad, 'attributed_rev'),
-                'Transactions': get_metric_value(ad, 'transactions'),
-                'Impressions': get_metric_value(ad, 'impressions'),
-                'Link Clicks': get_metric_value(ad, 'meta_link_clicks'),
-                'Video Views': get_metric_value(ad, 'meta_3s_video_views'),
-                'ROAS': get_metric_value(ad, 'roas'),
-                'CTR': (get_metric_value(ad, 'meta_link_clicks') / get_metric_value(ad, 'impressions') * 100) if get_metric_value(ad, 'impressions') > 0 else 0,
-                'CPM': (get_metric_value(ad, 'spend') / get_metric_value(ad, 'impressions') * 1000) if get_metric_value(ad, 'impressions') > 0 else 0,
-                'Thumbstop': (get_metric_value(ad, 'meta_3s_video_views') / get_metric_value(ad, 'impressions') * 100) if get_metric_value(ad, 'impressions') > 0 else 0,
-                'AOV': get_metric_value(ad, 'attributed_rev') / get_metric_value(ad, 'transactions') if get_metric_value(ad, 'transactions') > 0 else 0
+                'Spend': get_metric_value(ad, 'spend', data_source),
+                'Revenue': get_metric_value(ad, 'attributed_rev', data_source),
+                'Transactions': get_metric_value(ad, 'transactions', data_source),
+                'Impressions': get_metric_value(ad, 'impressions', data_source),
+                'Link Clicks': get_metric_value(ad, 'meta_link_clicks', data_source),
+                'Video Views': get_metric_value(ad, 'meta_3s_video_views', data_source),
+                'ROAS': get_metric_value(ad, 'roas', data_source),
+                'CTR': (get_metric_value(ad, 'meta_link_clicks', data_source) / get_metric_value(ad, 'impressions', data_source) * 100) if get_metric_value(ad, 'impressions', data_source) > 0 else 0,
+                'CPM': (get_metric_value(ad, 'spend', data_source) / get_metric_value(ad, 'impressions', data_source) * 1000) if get_metric_value(ad, 'impressions', data_source) > 0 else 0,
+                'Thumbstop': (get_metric_value(ad, 'meta_3s_video_views', data_source) / get_metric_value(ad, 'impressions', data_source) * 100) if get_metric_value(ad, 'impressions', data_source) > 0 else 0,
+                'AOV': get_metric_value(ad, 'attributed_rev', data_source) / get_metric_value(ad, 'transactions', data_source) if get_metric_value(ad, 'transactions', data_source) > 0 else 0
             })
         
         ads_df = pd.DataFrame(ads_data)
