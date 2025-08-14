@@ -2418,7 +2418,7 @@ def calculate_aggregated_metrics(ad_objects, group_by_field, top_n=10):
 
 def display_summary_tab(ad_objects, top_n=DEFAULT_TOP_N):
     """Display the summary tab with overall metrics and top N tables"""
-    st.header("📊 Campaign Summary")
+    st.header("📊 All Ads Summary")
     
     # Use the currently selected view source from session state
     current_view_source = st.session_state.get('current_view_source', 'Meta')
@@ -2591,8 +2591,27 @@ def display_summary_tab(ad_objects, top_n=DEFAULT_TOP_N):
         columns = ['Thumbnail'] + [col for col in top_products_df_display.columns if col != 'Thumbnail']
         top_products_df_display = top_products_df_display[columns]
         
+        # Format the display dataframe
+        top_products_df_formatted = top_products_df_display.copy()
+        if 'Spend' in top_products_df_formatted.columns:
+            top_products_df_formatted['Spend'] = top_products_df_formatted['Spend'].apply(format_currency)
+        if 'Revenue' in top_products_df_formatted.columns:
+            top_products_df_formatted['Revenue'] = top_products_df_formatted['Revenue'].apply(format_currency)
+        if 'ROAS' in top_products_df_formatted.columns:
+            top_products_df_formatted['ROAS'] = top_products_df_formatted['ROAS'].apply(format_roas)
+        if 'CTR' in top_products_df_formatted.columns:
+            top_products_df_formatted['CTR'] = top_products_df_formatted['CTR'].apply(format_percentage)
+        if 'CPM' in top_products_df_formatted.columns:
+            top_products_df_formatted['CPM'] = top_products_df_formatted['CPM'].apply(format_currency)
+        if 'Thumbstop' in top_products_df_formatted.columns:
+            top_products_df_formatted['Thumbstop'] = top_products_df_formatted['Thumbstop'].apply(format_percentage)
+        if 'AOV' in top_products_df_formatted.columns:
+            top_products_df_formatted['AOV'] = top_products_df_formatted['AOV'].apply(format_currency)
+        if 'Transactions' in top_products_df_formatted.columns:
+            top_products_df_formatted['Transactions'] = top_products_df_formatted['Transactions'].apply(format_large_number)
+        
         st.dataframe(
-            top_products_df_display,
+            top_products_df_formatted,
             column_config={
                 "Thumbnail": st.column_config.ImageColumn(
                     "Thumbnail",
@@ -2602,7 +2621,7 @@ def display_summary_tab(ad_objects, top_n=DEFAULT_TOP_N):
             },
             use_container_width=True,
             hide_index=True
-                )
+        )
         
         # Show all products in expander
         with st.expander(f"📦 Show all {len(products_df)} products"):
@@ -2619,8 +2638,27 @@ def display_summary_tab(ad_objects, top_n=DEFAULT_TOP_N):
             columns = ['Thumbnail'] + [col for col in all_products_df_display.columns if col != 'Thumbnail']
             all_products_df_display = all_products_df_display[columns]
             
+            # Format the display dataframe
+            all_products_df_formatted = all_products_df_display.copy()
+            if 'Spend' in all_products_df_formatted.columns:
+                all_products_df_formatted['Spend'] = all_products_df_formatted['Spend'].apply(format_currency)
+            if 'Revenue' in all_products_df_formatted.columns:
+                all_products_df_formatted['Revenue'] = all_products_df_formatted['Revenue'].apply(format_currency)
+            if 'ROAS' in all_products_df_formatted.columns:
+                all_products_df_formatted['ROAS'] = all_products_df_formatted['ROAS'].apply(format_roas)
+            if 'CTR' in all_products_df_formatted.columns:
+                all_products_df_formatted['CTR'] = all_products_df_formatted['CTR'].apply(format_percentage)
+            if 'CPM' in all_products_df_formatted.columns:
+                all_products_df_formatted['CPM'] = all_products_df_formatted['CPM'].apply(format_currency)
+            if 'Thumbstop' in all_products_df_formatted.columns:
+                all_products_df_formatted['Thumbstop'] = all_products_df_formatted['Thumbstop'].apply(format_percentage)
+            if 'AOV' in all_products_df_formatted.columns:
+                all_products_df_formatted['AOV'] = all_products_df_formatted['AOV'].apply(format_currency)
+            if 'Transactions' in all_products_df_formatted.columns:
+                all_products_df_formatted['Transactions'] = all_products_df_formatted['Transactions'].apply(format_large_number)
+            
             st.dataframe(
-                all_products_df_display,
+                all_products_df_formatted,
                 column_config={
                     "Thumbnail": st.column_config.ImageColumn(
                         "Thumbnail",
@@ -2670,8 +2708,33 @@ def display_summary_tab(ad_objects, top_n=DEFAULT_TOP_N):
         columns = ['Thumbnail'] + [col for col in top_creators_df.columns if col != 'Thumbnail']
         top_creators_df = top_creators_df[columns]
         
+        # Format the display dataframe
+        top_creators_df_formatted = top_creators_df.copy()
+        if 'Spend' in top_creators_df_formatted.columns:
+            top_creators_df_formatted['Spend'] = top_creators_df_formatted['Spend'].apply(format_currency)
+        if 'Revenue' in top_creators_df_formatted.columns:
+            top_creators_df_formatted['Revenue'] = top_creators_df_formatted['Revenue'].apply(format_currency)
+        if 'ROAS' in top_creators_df_formatted.columns:
+            top_creators_df_formatted['ROAS'] = top_creators_df_formatted['ROAS'].apply(format_roas)
+        if 'CTR' in top_creators_df_formatted.columns:
+            top_creators_df_formatted['CTR'] = top_creators_df_formatted['CTR'].apply(format_percentage)
+        if 'CPM' in top_creators_df_formatted.columns:
+            top_creators_df_formatted['CPM'] = top_creators_df_formatted['CPM'].apply(format_currency)
+        if 'Thumbstop' in top_creators_df_formatted.columns:
+            top_creators_df_formatted['Thumbstop'] = top_creators_df_formatted['Thumbstop'].apply(format_percentage)
+        if 'AOV' in top_creators_df_formatted.columns:
+            top_creators_df_formatted['AOV'] = top_creators_df_formatted['AOV'].apply(format_currency)
+        if 'Transactions' in top_creators_df_formatted.columns:
+            top_creators_df_formatted['Transactions'] = top_creators_df_formatted['Transactions'].apply(format_large_number)
+        if 'Impressions' in top_creators_df_formatted.columns:
+            top_creators_df_formatted['Impressions'] = top_creators_df_formatted['Impressions'].apply(format_large_number)
+        if 'Link Clicks' in top_creators_df_formatted.columns:
+            top_creators_df_formatted['Link Clicks'] = top_creators_df_formatted['Link Clicks'].apply(format_large_number)
+        if 'Video Views' in top_creators_df_formatted.columns:
+            top_creators_df_formatted['Video Views'] = top_creators_df_formatted['Video Views'].apply(format_large_number)
+        
         st.dataframe(
-            top_creators_df,
+            top_creators_df_formatted,
             column_config={
                 "Thumbnail": st.column_config.ImageColumn(
                     "Thumbnail",
@@ -2695,8 +2758,33 @@ def display_summary_tab(ad_objects, top_n=DEFAULT_TOP_N):
             columns = ['Thumbnail'] + [col for col in all_creators_df.columns if col != 'Thumbnail']
             all_creators_df = all_creators_df[columns]
             
+            # Format the display dataframe
+            all_creators_df_formatted = all_creators_df.copy()
+            if 'Spend' in all_creators_df_formatted.columns:
+                all_creators_df_formatted['Spend'] = all_creators_df_formatted['Spend'].apply(format_currency)
+            if 'Revenue' in all_creators_df_formatted.columns:
+                all_creators_df_formatted['Revenue'] = all_creators_df_formatted['Revenue'].apply(format_currency)
+            if 'ROAS' in all_creators_df_formatted.columns:
+                all_creators_df_formatted['ROAS'] = all_creators_df_formatted['ROAS'].apply(format_roas)
+            if 'CTR' in all_creators_df_formatted.columns:
+                all_creators_df_formatted['CTR'] = all_creators_df_formatted['CTR'].apply(format_percentage)
+            if 'CPM' in all_creators_df_formatted.columns:
+                all_creators_df_formatted['CPM'] = all_creators_df_formatted['CPM'].apply(format_currency)
+            if 'Thumbstop' in all_creators_df_formatted.columns:
+                all_creators_df_formatted['Thumbstop'] = all_creators_df_formatted['Thumbstop'].apply(format_percentage)
+            if 'AOV' in all_creators_df_formatted.columns:
+                all_creators_df_formatted['AOV'] = all_creators_df_formatted['AOV'].apply(format_currency)
+            if 'Transactions' in all_creators_df_formatted.columns:
+                all_creators_df_formatted['Transactions'] = all_creators_df_formatted['Transactions'].apply(format_large_number)
+            if 'Impressions' in all_creators_df_formatted.columns:
+                all_creators_df_formatted['Impressions'] = all_creators_df_formatted['Impressions'].apply(format_large_number)
+            if 'Link Clicks' in all_creators_df_formatted.columns:
+                all_creators_df_formatted['Link Clicks'] = all_creators_df_formatted['Link Clicks'].apply(format_large_number)
+            if 'Video Views' in all_creators_df_formatted.columns:
+                all_creators_df_formatted['Video Views'] = all_creators_df_formatted['Video Views'].apply(format_large_number)
+            
             st.dataframe(
-                all_creators_df,
+                all_creators_df_formatted,
                 column_config={
                     "Thumbnail": st.column_config.ImageColumn(
                         "Thumbnail",
