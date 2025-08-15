@@ -81,14 +81,12 @@ AD_ACCOUNT_NAME = "Thrive Causemetics"
 AD_ACCOUNT_ID = '753196138360184'
 PAGE_ID = "445629222247515"  # Your specific page ID for better video access
 
-# Attribution configuration - imported from northbeam_client
-from northbeam_client import (
-    NORTHBEAM_ATTRIBUTION_MODEL,
-    NORTHBEAM_ATTRIBUTION_WINDOW, 
-    NORTHBEAM_ACCOUNTING_MODE_API,
-    NORTHBEAM_ACCOUNTING_MODE_FILTER,
-    NORTHBEAM_PLATFORM
-)
+# Attribution configuration
+NORTHBEAM_ATTRIBUTION_MODEL = "last_touch_non_direct"
+NORTHBEAM_ATTRIBUTION_WINDOW = "1"
+NORTHBEAM_ACCOUNTING_MODE_API = "accrual"  # For API payload
+NORTHBEAM_ACCOUNTING_MODE_FILTER = "Accrual performance"
+NORTHBEAM_PLATFORM = "fb"  # Platform for Northbeam attribution filtering
 
 DEBUG_MODE = True  # Set to True to use existing CSV/JSON files if available
 
@@ -753,7 +751,12 @@ def fetch_northbeam_data(date_from=None, date_to=None):
         raise ValueError("date_from and date_to must be provided to fetch_northbeam_data")
     
     try:
-        client = NorthbeamClient()
+        client = NorthbeamClient(
+            attribution_model=NORTHBEAM_ATTRIBUTION_MODEL,
+            attribution_window=NORTHBEAM_ATTRIBUTION_WINDOW,
+            accounting_mode_api=NORTHBEAM_ACCOUNTING_MODE_API,
+            platform=NORTHBEAM_PLATFORM
+        )
         return client.fetch_data(date_from, date_to, DOWNLOAD_REPORTS_LOCALLY)
     except Exception as e:
         print(f"❌ Error creating Northbeam client: {e}")
@@ -795,16 +798,16 @@ def fetch_all_data_concurrently(date_from=None, date_to=None, use_cached_files=T
     s3_meta_key = f"{ROOT_DIRECTORY}/raw/meta_insights/meta_insights_{date_from_formatted}-{date_to_formatted}.json"
     s3_northbeam_key = f"{ROOT_DIRECTORY}/raw/northbeam/northbeam_{date_from_formatted}-{date_to_formatted}.csv"
     
-    # Check for Meta insights file (S3 first, then local fallback)
+    # Check for Meta insights file in organized S3 folder (cache check)
     if file_exists_in_s3(s3_meta_key):
         try:
             existing_files['meta_insights'] = load_json_from_s3(s3_meta_key)
             if existing_files['meta_insights']:
-                print(f"✅ Found existing Meta insights in S3: {len(existing_files['meta_insights'])} ads")
+                print(f"✅ Found existing Meta insights in organized S3 folder: {len(existing_files['meta_insights'])} ads")
         except Exception as e:
             print(f"⚠️ Error loading existing Meta insights from S3: {e}")
     else:
-        print(f"❌ Meta insights not found in S3")
+        print(f"📁 Meta insights not found in organized S3 folder (campaign-reporting/raw/meta_insights/)")
     
     # Fallback to local Meta insights file (only if local saving is enabled)
     if DOWNLOAD_REPORTS_LOCALLY and existing_files['meta_insights'] is None:
@@ -818,7 +821,7 @@ def fetch_all_data_concurrently(date_from=None, date_to=None, use_cached_files=T
         else:
             print(f"📁 Meta insights not found locally")
     
-    # Check for Northbeam data file (S3 first, then local fallback)
+    # Check for Northbeam data file in organized S3 folder (cache check)
     if file_exists_in_s3(s3_northbeam_key):
         try:
             # Download CSV from S3 to temporary file
@@ -832,11 +835,11 @@ def fetch_all_data_concurrently(date_from=None, date_to=None, use_cached_files=T
                 'campaign_id': str,
                 'adset_id': str
             })
-            print(f"✅ Found existing Northbeam data in S3: {len(existing_files['northbeam_data'])} rows")
+            print(f"✅ Found existing Northbeam data in organized S3 folder: {len(existing_files['northbeam_data'])} rows")
         except Exception as e:
             print(f"⚠️ Error loading existing Northbeam data from S3: {e}")
     else:
-        print(f"❌ Northbeam data not found in S3")
+        print(f"📁 Northbeam data not found in organized S3 folder (campaign-reporting/raw/northbeam/)")
     
     # Fallback to local Northbeam data file (only if local saving is enabled)
     if DOWNLOAD_REPORTS_LOCALLY and existing_files['northbeam_data'] is None:
