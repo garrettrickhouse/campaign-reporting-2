@@ -278,7 +278,7 @@ class NorthbeamClient:
         s3_client = self.get_s3_client()
         
         try:
-            # First check for processed data in our campaign-reporting directory
+            # First check for processed data in our organized campaign-reporting directory
             processed_key = f"campaign-reporting/raw/northbeam/northbeam_{self._format_date_for_filename(start_date)}-{self._format_date_for_filename(end_date)}.csv"
             if self.file_exists_in_s3(processed_key):
                 print(f"📁 Found existing processed data in S3: {processed_key}")
@@ -291,16 +291,16 @@ class NorthbeamClient:
                 print(f"✅ Downloaded {len(df)} rows from existing S3 data")
                 return df
             
-            # Fallback to checking for any Northbeam files with matching date range
-            print(f"🔍 Searching S3 for Northbeam files with date range {start_date} to {end_date}...")
+            # Fallback to checking for Northbeam export files in the root bucket
+            print(f"🔍 Searching root bucket for Northbeam export files with date range {start_date} to {end_date}...")
             response = s3_client.list_objects_v2(Bucket=self.s3_bucket, MaxKeys=1000)
             
             if 'Contents' in response:
                 matching_files = []
                 for obj in response['Contents']:
                     key = obj['Key']
-                    # Look for files that start with northbeam_ and contain the date range
-                    # Northbeam exports may have timestamps, so we need to be flexible
+                    # Look for Northbeam export files in root bucket that contain the date range
+                    # These files may have timestamps (e.g., northbeam_20250808-20250814_14_12_11.csv)
                     if (key.startswith('northbeam_') and 
                         key.endswith('.csv') and
                         f"{self._format_date_for_filename(start_date)}" in key and
@@ -315,16 +315,15 @@ class NorthbeamClient:
                     # Sort by last modified (newest first) and size (largest first)
                     matching_files.sort(key=lambda x: (x['last_modified'], x['size']), reverse=True)
                     best_match = matching_files[0]
-                    print(f"📁 Found {len(matching_files)} matching Northbeam files in S3")
+                    print(f"📁 Found {len(matching_files)} matching Northbeam export files in root bucket")
                     print(f"📁 Using best match: {best_match['key']} (modified: {best_match['last_modified']}, size: {best_match['size']} bytes)")
                     
                     response = s3_client.get_object(Bucket=self.s3_bucket, Key=best_match['key'])
                     df = pd.read_csv(io.BytesIO(response['Body'].read()), dtype={
                         'ad_id': str,
-                        'campaign_id': str,
                         'adset_id': str
                     })
-                    print(f"✅ Downloaded {len(df)} rows from S3 fallback")
+                    print(f"✅ Downloaded {len(df)} rows from S3 fallback (root bucket)")
                     
                     # Save locally if enabled
                     if download_reports_locally:
