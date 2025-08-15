@@ -89,6 +89,7 @@ DEBUG_MODE = True  # Set to True to use existing CSV/JSON files if available
 
 ACCOUNTING_MODE_API = "accrual"  # For API payload
 ACCOUNTING_MODE_FILTER = "Accrual performance"
+NORTHBEAM_PLATFORM = "fb"  # Platform for Northbeam attribution filtering
 
 
 # ===== META API ENDPOINT CONFIGURATION =====
