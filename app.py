@@ -82,14 +82,13 @@ AD_ACCOUNT_ID = '753196138360184'
 PAGE_ID = "445629222247515"  # Your specific page ID for better video access
 
 # Attribution configuration
-ATTRIBUTION_MODEL = "last_touch_non_direct"
-ATTRIBUTION_WINDOW = "1"
+NORTHBEAM_ATTRIBUTION_MODEL = "last_touch_non_direct"
+NORTHBEAM_ATTRIBUTION_WINDOW = "1"
+NORTHBEAM_ACCOUNTING_MODE_API = "accrual"  # For API payload
+NORTHBEAM_ACCOUNTING_MODE_FILTER = "Accrual performance"
+NORTHBEAM_PLATFORM = "fb"  # Platform for Northbeam attribution filtering
 
 DEBUG_MODE = True  # Set to True to use existing CSV/JSON files if available
-
-ACCOUNTING_MODE_API = "accrual"  # For API payload
-ACCOUNTING_MODE_FILTER = "Accrual performance"
-NORTHBEAM_PLATFORM = "fb"  # Platform for Northbeam attribution filtering
 
 
 # ===== META API ENDPOINT CONFIGURATION =====
@@ -3964,7 +3963,7 @@ def main():
             if use_northbeam and northbeam_df is not None and len(northbeam_df) > 0:
                 # Import the filtering function
                                                         # Removed import - functions are now merged into app.py
-                northbeam_df = filter_attribution_data(northbeam_df, ACCOUNTING_MODE_FILTER, NORTHBEAM_PLATFORM)
+                northbeam_df = filter_attribution_data(northbeam_df, NORTHBEAM_ACCOUNTING_MODE_FILTER, NORTHBEAM_PLATFORM)
                 auto_hide_status_message(f"🔍 After filtering: {len(northbeam_df)} Northbeam rows", "info")
             
             # Check if we have at least one data source
