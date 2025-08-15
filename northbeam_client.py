@@ -22,18 +22,14 @@ from dotenv import load_dotenv
 # Load environment variables
 load_dotenv()
 
-# Northbeam configuration constants
-NORTHBEAM_ATTRIBUTION_MODEL = "last_touch_non_direct"
-NORTHBEAM_ATTRIBUTION_WINDOW = "1"
-NORTHBEAM_ACCOUNTING_MODE_API = "accrual"
-NORTHBEAM_ACCOUNTING_MODE_FILTER = "Accrual performance"
-NORTHBEAM_PLATFORM = "fb"
+# Northbeam configuration constants - these will be passed in from the calling application
 
 class NorthbeamClient:
     """Client for interacting with Northbeam API and managing exports"""
     
-    def __init__(self):
-        """Initialize Northbeam client with configuration from environment"""
+    def __init__(self, attribution_model="last_touch_non_direct", attribution_window="1", 
+                 accounting_mode_api="accrual", platform="fb"):
+        """Initialize Northbeam client with configuration from environment and parameters"""
         # Northbeam API configuration
         self.client_id = os.getenv('NORTHBEAM_DATA_CLIENT_ID')
         self.api_key = os.getenv('NORTHBEAM_API_KEY')
@@ -52,11 +48,11 @@ class NorthbeamClient:
         self.poll_interval = 5
         self.polling_timeout = 60
         
-        # Attribution configuration
-        self.attribution_model = NORTHBEAM_ATTRIBUTION_MODEL
-        self.attribution_window = NORTHBEAM_ATTRIBUTION_WINDOW
-        self.accounting_mode_api = NORTHBEAM_ACCOUNTING_MODE_API
-        self.platform = NORTHBEAM_PLATFORM
+        # Attribution configuration - passed in from calling application
+        self.attribution_model = attribution_model
+        self.attribution_window = attribution_window
+        self.accounting_mode_api = accounting_mode_api
+        self.platform = platform
         
         # Validate required configuration
         if not all([self.client_id, self.api_key, self.platform_account_id]):
@@ -269,6 +265,14 @@ class NorthbeamClient:
                         df.to_csv(csv_filename, index=False)
                         print(f"💾 Saved Northbeam CSV locally: {csv_filename}")
                     
+                    # Also save to organized S3 folder for future cache hits
+                    try:
+                        s3_key = f"campaign-reporting/raw/northbeam/northbeam_{self._format_date_for_filename(start_date)}-{self._format_date_for_filename(end_date)}.csv"
+                        self.save_to_s3(df, s3_key, content_type='text/csv')
+                        print(f"💾 Saved Northbeam CSV to organized S3 folder: {s3_key}")
+                    except Exception as e:
+                        print(f"⚠️ Could not save to organized S3 folder: {e}")
+                    
                     return df
             except Exception as e:
                 print(f"❌ Direct download failed: {e}")
@@ -331,6 +335,14 @@ class NorthbeamClient:
                         os.makedirs(f"campaign-reporting/raw/northbeam", exist_ok=True)
                         df.to_csv(csv_filename, index=False)
                         print(f"💾 Saved Northbeam CSV locally: {csv_filename}")
+                    
+                    # Also save to organized S3 folder for future cache hits
+                    try:
+                        s3_key = f"campaign-reporting/raw/northbeam/northbeam_{self._format_date_for_filename(start_date)}-{self._format_date_for_filename(end_date)}.csv"
+                        self.save_to_s3(df, s3_key, content_type='text/csv')
+                        print(f"💾 Saved Northbeam CSV to organized S3 folder: {s3_key}")
+                    except Exception as e:
+                        print(f"⚠️ Could not save to organized S3 folder: {e}")
                     
                     return df
                 else:
@@ -514,7 +526,9 @@ def download_export_data(export_id, start_date, end_date, timeout_seconds=20, po
     client = NorthbeamClient()
     return client.download_export_data(export_id, start_date, end_date, timeout_seconds, poll_interval)
 
-def fetch_northbeam_data(date_from=None, date_to=None, download_reports_locally=True):
+def fetch_northbeam_data(date_from=None, date_to=None, download_reports_locally=True, 
+                        attribution_model="last_touch_non_direct", attribution_window="1",
+                        accounting_mode_api="accrual", platform="fb"):
     """Fetch Northbeam data (backward compatibility)"""
-    client = NorthbeamClient()
+    client = NorthbeamClient(attribution_model, attribution_window, accounting_mode_api, platform)
     return client.fetch_data(date_from, date_to, download_reports_locally)
