@@ -28,6 +28,9 @@ from media_urls_manager import (
     load_media_urls_cache
 )
 
+# Import Northbeam client for API operations
+from northbeam_client import NorthbeamClient
+
 # Import authentication module
 from auth import require_authentication, show_logout_button
 
@@ -57,21 +60,11 @@ AD_TYPE_KEYWORD_VIDEO = "e:video"
 AD_TYPE_KEYWORD_STATIC = "e:static"
 AD_TYPE_KEYWORD_CAROUSEL = "e:carousel"
 
-# ===== NORTHBEAM CONFIGURATION =====
-NORTHBEAM_DATA_CLIENT_ID = os.getenv('NORTHBEAM_DATA_CLIENT_ID')
-NORTHBEAM_API_KEY = os.getenv('NORTHBEAM_API_KEY')
-NORTHBEAM_PLATFORM_ACCOUNT_ID = os.getenv('NORTHBEAM_PLATFORM_ACCOUNT_ID')
+# ===== AWS CONFIGURATION =====
 AWS_ACCESS_KEY_ID = os.getenv('AWS_ACCESS_KEY_ID')
 AWS_SECRET_ACCESS_KEY = os.getenv('AWS_SECRET_ACCESS_KEY')
 AWS_REGION = 'us-east-1'
 S3_BUCKET = os.getenv('S3_BUCKET')
-NORTHBEAM_BASE_URL = "https://api.northbeam.io/v1"
-
-# Northbeam export configuration
-NORTHBEAM_MAX_RETRIES = 3      # 3 retries default
-NORTHBEAM_RETRY_DELAY = 10         # Wait time between retry attempts (seconds)
-NORTHBEAM_POLL_INTERVAL = 5       # How often to poll during export download (seconds)
-NORTHBEAM_POLLING_TIMEOUT = 60    # Base timeout for polling attempts
 
 META_REQUEST_TIMEOUT = 30            # Timeout for Meta API requests
 META_RATE_LIMIT_DELAY = 0.5         # Delay between Meta API requests
@@ -96,7 +89,7 @@ DEBUG_MODE = True  # Set to True to use existing CSV/JSON files if available
 
 ACCOUNTING_MODE_API = "accrual"  # For API payload
 ACCOUNTING_MODE_FILTER = "Accrual performance"
-NORTHBEAM_PLATFORM = "fb"
+
 
 # ===== META API ENDPOINT CONFIGURATION =====
 META_ENDPOINT = f'{GRAPH_BASE}/act_{AD_ACCOUNT_ID}/insights'
@@ -256,13 +249,7 @@ def display_status_messages():
         # Note: Messages will auto-hide based on their timestamps
         # The page will refresh naturally as users interact with it
 
-def get_northbeam_headers():
-    """Headers for Northbeam API"""
-    return {
-        'accept': 'application/json',
-        'Data-Client-ID': NORTHBEAM_DATA_CLIENT_ID,
-        'Authorization': f'Bearer {NORTHBEAM_API_KEY}'
-    }
+
 
 def get_s3_client():
     """Get S3 client with credentials"""
@@ -752,332 +739,23 @@ def filter_attribution_data(df, target_accounting_mode, target_platform):
     
     return filtered_df
 
-def create_northbeam_export(start_date, end_date):
-    """Create a Northbeam export"""
-    
-    # Initial delay to avoid rate limits
-    time.sleep(2)
-    
-    url = f"{NORTHBEAM_BASE_URL}/exports/data-export"
-    
-    start_datetime = f"{start_date}T00:00:00Z"
-    end_datetime = f"{end_date}T23:59:59Z"
 
-    print("Start datetime: ", start_datetime)
-    print("End datetime: ", end_datetime)
 
-    payload = {
-        "period_type": "FIXED",
-        "period_options": {
-            "period_starting_at": start_datetime,
-            "period_ending_at": end_datetime,
-        },
-        "attribution_options": {
-            "attribution_models": [ATTRIBUTION_MODEL],
-            "attribution_windows": [ATTRIBUTION_WINDOW],
-            "accounting_modes": [ACCOUNTING_MODE_API]
-        },
-        "options": {
-            "remove_zero_spend": False,
-            "include_ids": True,
-            "include_kind_and_platform": True
-        },
-        "time_granularity": "DAILY",
-        "export_file_name": f"northbeam_{format_date_for_filename(start_date)}-{format_date_for_filename(end_date)}",
-        "bucket_name": S3_BUCKET,
-        "aws_role": "arn:aws:iam::881825931691:role/NorthbeamS3ExportRole",
-        "level": "ad",
-        "metrics": [
-            { "id": "spend", "label": "Spend" },
-            { "id": "impressions", "label": "Impressions" },
-            { "id": "metaLinkClicks", "label": "meta_link_clicks" },
-            { "id": "revAttributed", "label": "Attributed_Rev" },
-            { "id": "txns", "label": "Transactions" },
-            { "id": "roas", "label": "ROAS" },
-            { "id": "meta3SVideoViewsDefault", "label": "Meta_3S_Video_Views" }
-        ]
-    }
-    
 
-    for attempt in range(NORTHBEAM_MAX_RETRIES):
-        try:
-            response = requests.post(url, headers=get_northbeam_headers(), json=payload, timeout=60)
-            
-            if response.status_code == 201:
-                export_id = response.json().get('id')
-                print(f"✅ Export created successfully! ID: {export_id}")
-                return export_id
-            elif response.status_code == 429:
-                print(f"❌ Rate limit exceeded (429) on attempt {attempt + 1}: {response.text}")
-                print(f"⏱️ Waiting {NORTHBEAM_RETRY_DELAY} seconds before retrying...")
-                time.sleep(NORTHBEAM_RETRY_DELAY)
-                continue
-            elif response.status_code == 400:
-                print(f"❌ Bad request (400): {response.text}")
-                # Don't retry on 400 errors as they're likely configuration issues
-                return None
-            elif response.status_code >= 500:
-                print(f"❌ Server error ({response.status_code}) on attempt {attempt + 1}: {response.text}")
-                print(f"⏱️ Waiting {NORTHBEAM_RETRY_DELAY} seconds before retrying...")
-                time.sleep(NORTHBEAM_RETRY_DELAY)
-                continue
-            else:
-                print(f"❌ Export creation failed: {response.status_code}")
-                print(f"Response: {response.text}")
-                return None
-                
-        except requests.exceptions.Timeout:
-            print(f"⏰ Request timeout on attempt {attempt + 1}")
-            print(f"⏱️ Waiting {NORTHBEAM_RETRY_DELAY} seconds before retrying...")
-            time.sleep(NORTHBEAM_RETRY_DELAY)
-            continue
-        except requests.exceptions.RequestException as e:
-            print(f"❌ Request error on attempt {attempt + 1}: {e}")
-            print(f"⏱️ Waiting {NORTHBEAM_RETRY_DELAY} seconds before retrying...")
-            time.sleep(NORTHBEAM_RETRY_DELAY)
-            continue
-    
-    print(f"❌ Export creation failed after {NORTHBEAM_MAX_RETRIES} attempts")
-    return None
 
-def poll_northbeam_export_status(export_id, timeout_seconds=20, poll_interval=5):
-    """Poll Northbeam for export status until ready with configurable timeout and interval"""
-    
-    url = f"{NORTHBEAM_BASE_URL}/exports/data-export/result/{export_id}"
-    
-    start_time = time.time()
-    poll_count = 0
-    consecutive_errors = 0
-    max_consecutive_errors = 3
-    
-    while time.time() - start_time < timeout_seconds:
-        poll_count += 1
-        print(f"  🔄 Poll attempt {poll_count}...")
-        
-        try:
-            response = requests.get(url, headers=get_northbeam_headers(), timeout=60)
-            
-            if response.status_code == 200:
-                data = response.json()
-                status = data.get("status")
-                
-                print(f"  ↪ Status: {status}")
-                
-                # Reset error counter on successful response
-                consecutive_errors = 0
-                
-                if status in ["ready", "SUCCESS", "success", "COMPLETED"]:
-                    result_links = data.get("result", [])
-                    if result_links and len(result_links) > 0:
-                        print(f"✅ Export ready. File URL: {result_links[0]}")
-                        return result_links[0]
-                    else:
-                        print(f"✅ Export completed, falling back to S3...")
-                        return None
-                elif status in ["PENDING", "PROCESSING", "IN_PROGRESS"]:
-                    # Export is still processing, continue polling
-                    print(f"  ⏳ Export still processing...")
-                elif status in ["FAILED", "ERROR", "CANCELLED"]:
-                    print(f"❌ Export failed with status: {status}")
-                    if "error" in data:
-                        print(f"  Error details: {data['error']}")
-                    return None
-                else:
-                    print(f"  ⚠️ Unknown status: {status}")
-                    
-            elif response.status_code == 429:
-                consecutive_errors += 1
-                wait_time = NORTHBEAM_RETRY_DELAY  # Consistent delay
-                print(f"  ⚠️ Rate limit hit during polling (attempt {consecutive_errors}), waiting {wait_time} seconds...")
-                time.sleep(wait_time)
-                continue
-            elif response.status_code == 404:
-                print(f"❌ Export not found (404) - may have been deleted or expired")
-                return None
-            else:
-                consecutive_errors += 1
-                print(f"  ❌ HTTP {response.status_code}: {response.text}")
-                
-        except requests.exceptions.Timeout:
-            consecutive_errors += 1
-            print(f"  ⏰ Request timeout on poll attempt {poll_count}")
-        except requests.exceptions.RequestException as e:
-            consecutive_errors += 1
-            print(f"  ❌ Request error on poll attempt {poll_count}: {e}")
-        
-        # If we have too many consecutive errors, increase wait time
-        if consecutive_errors >= max_consecutive_errors:
-            print(f"  ⚠️ Too many consecutive errors, increasing wait time...")
-            time.sleep(poll_interval * 2)
-            consecutive_errors = 0  # Reset after longer wait
-        else:
-            time.sleep(poll_interval)
-    
-    print(f"❌ Export polling timed out after {timeout_seconds} seconds")
-    print(f"   - Total poll attempts: {poll_count}")
-    print(f"   - Export will be retried with increased timeout")
-    return None
 
-def download_export_data(export_id, start_date, end_date, timeout_seconds=20, poll_interval=5):
-    """Download the export data with configurable timeout and S3 fallback"""
-    
-    # Try direct download first with specified timeout and interval
-    direct_url = poll_northbeam_export_status(export_id, timeout_seconds=timeout_seconds, poll_interval=poll_interval)
-    if direct_url:
-        try:
-            response = requests.get(direct_url)
-            if response.status_code == 200:
-                # Read CSV with specific dtype to ensure ID columns are treated as strings
-                df = pd.read_csv(io.BytesIO(response.content), dtype={
-                    'ad_id': str,
-                    'campaign_id': str,
-                    'adset_id': str
-                })
-                
-                # Save CSV locally (only if local saving is enabled)
-                if DOWNLOAD_REPORTS_LOCALLY:
-                    csv_filename = f"{ROOT_DIRECTORY}/raw/northbeam/northbeam_{format_date_for_filename(start_date)}-{format_date_for_filename(end_date)}.csv"
-                    os.makedirs(f"{ROOT_DIRECTORY}/raw/northbeam", exist_ok=True)
-                    df.to_csv(csv_filename, index=False)
-                    print(f"💾 Saved Northbeam CSV locally: {csv_filename}")
-                
-                return df
-        except Exception as e:
-            print(f"❌ Direct download failed: {e}")
-    
-    # Fallback to S3 - check for existing processed data
-    print(f"⚠️ Export timed out, checking S3 for existing data...")
-    s3_client = get_s3_client()
-    try:
-        # First check for processed data in our campaign-reporting directory
-        processed_key = f"{ROOT_DIRECTORY}/raw/northbeam/northbeam_{format_date_for_filename(start_date)}-{format_date_for_filename(end_date)}.csv"
-        if file_exists_in_s3(processed_key):
-            print(f"📁 Found existing processed data in S3: {processed_key}")
-            response = s3_client.get_object(Bucket=S3_BUCKET, Key=processed_key)
-            df = pd.read_csv(io.BytesIO(response['Body'].read()), dtype={
-                'ad_id': str,
-                'campaign_id': str,
-                'adset_id': str
-            })
-            print(f"✅ Downloaded {len(df)} rows from existing S3 data")
-            return df
-        
-        # Fallback to checking Northbeam's S3 bucket for raw exports
-        response = s3_client.list_objects_v2(Bucket=S3_BUCKET, MaxKeys=100)
-        if 'Contents' in response:
-            matching_files = []
-            for obj in response['Contents']:
-                key = obj['Key']
-                if key.startswith(f"northbeam_{format_date_for_filename(start_date)}-{format_date_for_filename(end_date)}") and key.endswith('.csv'):
-                    matching_files.append({
-                        'key': key,
-                        'last_modified': obj['LastModified']
-                    })
-            
-            if matching_files:
-                matching_files.sort(key=lambda x: x['last_modified'], reverse=True)
-                actual_file_key = matching_files[0]['key']
-                print(f"📁 Found raw export in S3: {actual_file_key}")
-                
-                response = s3_client.get_object(Bucket=S3_BUCKET, Key=actual_file_key)
-                df = pd.read_csv(io.BytesIO(response['Body'].read()), dtype={
-                    'ad_id': str,
-                    'campaign_id': str,
-                    'adset_id': str
-                })
-                print(f"✅ Downloaded {len(df)} rows from raw S3 export")
-                
-                # Save CSV locally (only if local saving is enabled)
-                if DOWNLOAD_REPORTS_LOCALLY:
-                    csv_filename = f"{ROOT_DIRECTORY}/raw/northbeam/northbeam_{format_date_for_filename(start_date)}-{format_date_for_filename(end_date)}.csv"
-                    os.makedirs(f"{ROOT_DIRECTORY}/raw/northbeam", exist_ok=True)
-                    df.to_csv(csv_filename, index=False)
-                    print(f"💾 Saved Northbeam CSV locally: {csv_filename}")
-                
-                return df
-            else:
-                print("❌ No matching files found in S3")
-                return None
-        else:
-            print("❌ No files found in S3 bucket")
-            return None
-    except Exception as e:
-        print(f"❌ S3 download failed: {e}")
-        return None
 
 def fetch_northbeam_data(date_from=None, date_to=None):
-    """Fetch Northbeam data for the specified date range with consistent delay retry logic"""
-    # Safety check for date_from and date_to - if not set, raise error
+    """Fetch Northbeam data for the specified date range using the Northbeam client"""
     if date_from is None or date_to is None:
         raise ValueError("date_from and date_to must be provided to fetch_northbeam_data")
     
-    print(f"\n🔄 Fetching Northbeam data for {date_from} to {date_to}...")
-    
-    # Polling configuration: (poll_interval, timeout) for each attempt
-    polling_config = [
-        (NORTHBEAM_POLL_INTERVAL, NORTHBEAM_POLLING_TIMEOUT),                    # 1st attempt: poll every [interval] for [timemout]
-        (NORTHBEAM_POLL_INTERVAL, NORTHBEAM_POLLING_TIMEOUT * 2),  
-        (NORTHBEAM_POLL_INTERVAL, NORTHBEAM_POLLING_TIMEOUT * 3) 
-    ]
-    
-    # Try up to 3 times with consistent delays
-    for attempt in range(1, NORTHBEAM_MAX_RETRIES + 1):
-        print(f"📊 Attempt {attempt}/{NORTHBEAM_MAX_RETRIES}")
-        
-        # Get polling settings for this attempt
-        poll_interval, timeout = polling_config[attempt - 1]
-        print(f"⏱️  Polling: every {poll_interval}s for {timeout}s total")
-        print(f"⏱️  Total timeout: {timeout} seconds ({timeout/60:.1f} minutes)")
-        
-        # Create export
-        export_id = create_northbeam_export(date_from, date_to)
-        if not export_id:
-            print(f"❌ Attempt {attempt}: Failed to create Northbeam export")
-            if attempt < NORTHBEAM_MAX_RETRIES:
-                print("🔄 Retrying immediately...")
-                continue
-            else:
-                print("❌ All attempts failed - giving up")
-                return None
-        
-        # Download data with consistent delay timeout and interval
-        df = download_export_data(export_id, date_from, date_to, timeout, poll_interval)
-        if df is not None:
-            # Success! Filter and save data
-            filtered_df = filter_attribution_data(df, ACCOUNTING_MODE_FILTER, NORTHBEAM_PLATFORM)
-            
-            # Save filtered data
-            date_from_formatted = format_date_for_filename(date_from)
-            date_to_formatted = format_date_for_filename(date_to)
-            
-            # Save to S3
-            raw_northbeam_directory = f"{ROOT_DIRECTORY}/raw/northbeam/"
-            raw_northbeam_filename = f"northbeam_{date_from_formatted}-{date_to_formatted}.csv"
-            csv_file_path = raw_northbeam_directory + raw_northbeam_filename
-            save_csv_to_s3(filtered_df, csv_file_path)
-            
-            # Save locally if enabled
-            if DOWNLOAD_REPORTS_LOCALLY:
-                os.makedirs(raw_northbeam_directory, exist_ok=True)
-                filtered_df.to_csv(csv_file_path, index=False)
-                print(f"💾 Saved Northbeam CSV: {csv_file_path}")
-            else:
-                print(f"💾 Northbeam CSV saved to S3 only (local saving disabled)")
-            
-            print(f"✅ Attempt {attempt} succeeded!")
-            return filtered_df
-        
-        # This attempt failed
-        print(f"❌ Attempt {attempt}: Failed to download Northbeam data")
-        
-        if attempt < NORTHBEAM_MAX_RETRIES:
-            print(f"⏳ Waiting {NORTHBEAM_RETRY_DELAY} seconds before retry...")
-            time.sleep(NORTHBEAM_RETRY_DELAY)  # Sleep between retries
-            print("🔄 Retrying...")
-        else:
-            print("❌ All attempts failed - giving up")
-    
-    return None
+    try:
+        client = NorthbeamClient()
+        return client.fetch_data(date_from, date_to, DOWNLOAD_REPORTS_LOCALLY)
+    except Exception as e:
+        print(f"❌ Error creating Northbeam client: {e}")
+        return None
 
 def fetch_all_data_concurrently(date_from=None, date_to=None, use_cached_files=True, use_meta=True, use_northbeam=True):
     """
