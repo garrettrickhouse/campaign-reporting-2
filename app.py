@@ -81,12 +81,14 @@ AD_ACCOUNT_NAME = "Thrive Causemetics"
 AD_ACCOUNT_ID = '753196138360184'
 PAGE_ID = "445629222247515"  # Your specific page ID for better video access
 
-# Attribution configuration
-NORTHBEAM_ATTRIBUTION_MODEL = "last_touch_non_direct"
-NORTHBEAM_ATTRIBUTION_WINDOW = "1"
-NORTHBEAM_ACCOUNTING_MODE_API = "accrual"  # For API payload
-NORTHBEAM_ACCOUNTING_MODE_FILTER = "Accrual performance"
-NORTHBEAM_PLATFORM = "fb"  # Platform for Northbeam attribution filtering
+# Attribution configuration - imported from northbeam_client
+from northbeam_client import (
+    NORTHBEAM_ATTRIBUTION_MODEL,
+    NORTHBEAM_ATTRIBUTION_WINDOW, 
+    NORTHBEAM_ACCOUNTING_MODE_API,
+    NORTHBEAM_ACCOUNTING_MODE_FILTER,
+    NORTHBEAM_PLATFORM
+)
 
 DEBUG_MODE = True  # Set to True to use existing CSV/JSON files if available
 

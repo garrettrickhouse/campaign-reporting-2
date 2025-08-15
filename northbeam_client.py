@@ -22,6 +22,13 @@ from dotenv import load_dotenv
 # Load environment variables
 load_dotenv()
 
+# Northbeam configuration constants
+NORTHBEAM_ATTRIBUTION_MODEL = "last_touch_non_direct"
+NORTHBEAM_ATTRIBUTION_WINDOW = "1"
+NORTHBEAM_ACCOUNTING_MODE_API = "accrual"
+NORTHBEAM_ACCOUNTING_MODE_FILTER = "Accrual performance"
+NORTHBEAM_PLATFORM = "fb"
+
 class NorthbeamClient:
     """Client for interacting with Northbeam API and managing exports"""
     
@@ -46,10 +53,10 @@ class NorthbeamClient:
         self.polling_timeout = 60
         
         # Attribution configuration
-        self.attribution_model = "last_touch_non_direct"
-        self.attribution_window = "1"
-        self.accounting_mode_api = "accrual"
-        self.platform = "fb"
+        self.attribution_model = NORTHBEAM_ATTRIBUTION_MODEL
+        self.attribution_window = NORTHBEAM_ATTRIBUTION_WINDOW
+        self.accounting_mode_api = NORTHBEAM_ACCOUNTING_MODE_API
+        self.platform = NORTHBEAM_PLATFORM
         
         # Validate required configuration
         if not all([self.client_id, self.api_key, self.platform_account_id]):
@@ -292,10 +299,12 @@ class NorthbeamClient:
                 matching_files = []
                 for obj in response['Contents']:
                     key = obj['Key']
-                    # Look for files that start with northbeam_ and contain the complete date range
+                    # Look for files that start with northbeam_ and contain the date range
+                    # Northbeam exports may have timestamps, so we need to be flexible
                     if (key.startswith('northbeam_') and 
                         key.endswith('.csv') and
-                        f"{self._format_date_for_filename(start_date)}-{self._format_date_for_filename(end_date)}" in key):
+                        f"{self._format_date_for_filename(start_date)}" in key and
+                        f"{self._format_date_for_filename(end_date)}" in key):
                         matching_files.append({
                             'key': key,
                             'last_modified': obj['LastModified'],
