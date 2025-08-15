@@ -303,11 +303,11 @@ class NorthbeamClient:
         
         print(f"\n🔄 Fetching Northbeam data for {start_date} to {end_date}...")
         
-        # Progressive timeout strategy
+        # Progressive timeout strategy - use configured poll_interval consistently
         timeout_strategies = [
-            (self.poll_interval, self.polling_timeout),                    # 1st attempt: poll every [interval] for [timeout]
-            (self.poll_interval, self.polling_timeout * 2),               # 2nd attempt: poll every [interval] for [timeout * 2]
-            (self.poll_interval, self.polling_timeout * 3)                # 3rd attempt: poll every [interval] for [timeout * 3]
+            self.polling_timeout,                    # 1st attempt: timeout
+            self.polling_timeout * 2,               # 2nd attempt: timeout * 2
+            self.polling_timeout * 3                # 3rd attempt: timeout * 3
         ]
         
         for attempt in range(1, self.max_retries + 1):
@@ -323,9 +323,9 @@ class NorthbeamClient:
                         time.sleep(self.retry_delay)
                     continue
                 
-                # Download data with progressive timeout
-                timeout_seconds, poll_interval = timeout_strategies[min(attempt - 1, len(timeout_strategies) - 1)]
-                df = self.download_export_data(export_id, start_date, end_date, timeout_seconds, poll_interval, download_reports_locally)
+                # Download data with progressive timeout but consistent poll_interval
+                timeout_seconds = timeout_strategies[min(attempt - 1, len(timeout_strategies) - 1)]
+                df = self.download_export_data(export_id, start_date, end_date, timeout_seconds, self.poll_interval, download_reports_locally)
                 
                 if df is not None:
                     # Filter and process the data
