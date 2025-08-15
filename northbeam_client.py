@@ -270,26 +270,68 @@ class NorthbeamClient:
         print(f"⚠️ Export timed out, checking S3 for existing data...")
         s3_client = self.get_s3_client()
         
-        # Check for existing processed data in S3
-        processed_key = f"campaign-reporting/raw/northbeam/northbeam_{self._format_date_for_filename(start_date)}-{self._format_date_for_filename(end_date)}.csv"
-        
         try:
-            response = s3_client.get_object(Bucket=self.s3_bucket, Key=processed_key)
-            df = pd.read_csv(response['Body'], dtype={
-                'ad_id': str,
-                'campaign_id': str,
-                'adset_id': str
-            })
-            print(f"✅ Found existing Northbeam data in S3: {len(df)} rows")
+            # First check for processed data in our campaign-reporting directory
+            processed_key = f"campaign-reporting/raw/northbeam/northbeam_{self._format_date_for_filename(start_date)}-{self._format_date_for_filename(end_date)}.csv"
+            if self.file_exists_in_s3(processed_key):
+                print(f"📁 Found existing processed data in S3: {processed_key}")
+                response = s3_client.get_object(Bucket=self.s3_bucket, Key=processed_key)
+                df = pd.read_csv(io.BytesIO(response['Body'].read()), dtype={
+                    'ad_id': str,
+                    'campaign_id': str,
+                    'adset_id': str
+                })
+                print(f"✅ Downloaded {len(df)} rows from existing S3 data")
+                return df
             
-            # Save locally if enabled
-            if download_reports_locally:
-                csv_filename = f"campaign-reporting/raw/northbeam/northbeam_{self._format_date_for_filename(start_date)}-{self._format_date_for_filename(end_date)}.csv"
-                os.makedirs(f"campaign-reporting/raw/northbeam", exist_ok=True)
-                df.to_csv(csv_filename, index=False)
-                print(f"💾 Saved Northbeam CSV locally: {csv_filename}")
+            # Fallback to checking for any Northbeam files with matching date range
+            print(f"🔍 Searching S3 for Northbeam files with date range {start_date} to {end_date}...")
+            response = s3_client.list_objects_v2(Bucket=self.s3_bucket, MaxKeys=1000)
             
-            return df
+            if 'Contents' in response:
+                matching_files = []
+                for obj in response['Contents']:
+                    key = obj['Key']
+                    # Look for files that start with northbeam_ and contain the date range
+                    if (key.startswith('northbeam_') and 
+                        key.endswith('.csv') and
+                        f"{self._format_date_for_filename(start_date)}" in key):
+                        matching_files.append({
+                            'key': key,
+                            'last_modified': obj['LastModified'],
+                            'size': obj['Size']
+                        })
+                
+                if matching_files:
+                    # Sort by last modified (newest first) and size (largest first)
+                    matching_files.sort(key=lambda x: (x['last_modified'], x['size']), reverse=True)
+                    best_match = matching_files[0]
+                    print(f"📁 Found {len(matching_files)} matching Northbeam files in S3")
+                    print(f"📁 Using best match: {best_match['key']} (modified: {best_match['last_modified']}, size: {best_match['size']} bytes)")
+                    
+                    response = s3_client.get_object(Bucket=self.s3_bucket, Key=best_match['key'])
+                    df = pd.read_csv(io.BytesIO(response['Body'].read()), dtype={
+                        'ad_id': str,
+                        'campaign_id': str,
+                        'adset_id': str
+                    })
+                    print(f"✅ Downloaded {len(df)} rows from S3 fallback")
+                    
+                    # Save locally if enabled
+                    if download_reports_locally:
+                        csv_filename = f"campaign-reporting/raw/northbeam/northbeam_{self._format_date_for_filename(start_date)}-{self._format_date_for_filename(end_date)}.csv"
+                        os.makedirs(f"campaign-reporting/raw/northbeam", exist_ok=True)
+                        df.to_csv(csv_filename, index=False)
+                        print(f"💾 Saved Northbeam CSV locally: {csv_filename}")
+                    
+                    return df
+                else:
+                    print(f"❌ No matching Northbeam files found in S3 for date range {start_date} to {end_date}")
+                    return None
+            else:
+                print("❌ No files found in S3 bucket")
+                return None
+                
         except Exception as e:
             print(f"❌ S3 fallback failed: {e}")
             return None
