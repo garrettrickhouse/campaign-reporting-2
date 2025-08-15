@@ -292,10 +292,10 @@ class NorthbeamClient:
                 matching_files = []
                 for obj in response['Contents']:
                     key = obj['Key']
-                    # Look for files that start with northbeam_ and contain the date range
+                    # Look for files that start with northbeam_ and contain the complete date range
                     if (key.startswith('northbeam_') and 
                         key.endswith('.csv') and
-                        f"{self._format_date_for_filename(start_date)}" in key):
+                        f"{self._format_date_for_filename(start_date)}-{self._format_date_for_filename(end_date)}" in key):
                         matching_files.append({
                             'key': key,
                             'last_modified': obj['LastModified'],
