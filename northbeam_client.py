@@ -241,8 +241,7 @@ class NorthbeamClient:
         return None
     
     def download_export_data(self, export_id: str, start_date: date, end_date: date, 
-                            timeout_seconds: int = 20, poll_interval: int = 5,
-                            download_reports_locally: bool = True) -> Optional[pd.DataFrame]:
+                            timeout_seconds: int = 20, poll_interval: int = 5) -> Optional[pd.DataFrame]:
         """Download the export data with configurable timeout and S3 fallback"""
         
         # Try direct download first with specified timeout and interval
@@ -258,14 +257,7 @@ class NorthbeamClient:
                         'adset_id': str
                     })
                     
-                    # Save CSV locally (only if local saving is enabled)
-                    if download_reports_locally:
-                        csv_filename = f"campaign-reporting/raw/northbeam/northbeam_{self._format_date_for_filename(start_date)}-{self._format_date_for_filename(end_date)}.csv"
-                        os.makedirs(f"campaign-reporting/raw/northbeam", exist_ok=True)
-                        df.to_csv(csv_filename, index=False)
-                        print(f"💾 Saved Northbeam CSV locally: {csv_filename}")
-                    
-                    # Also save to organized S3 folder for future cache hits
+                    # Save to organized S3 folder for future cache hits
                     try:
                         s3_key = f"campaign-reporting/raw/northbeam/northbeam_{self._format_date_for_filename(start_date)}-{self._format_date_for_filename(end_date)}.csv"
                         self.save_to_s3(df, s3_key, content_type='text/csv')
@@ -329,14 +321,7 @@ class NorthbeamClient:
                     })
                     print(f"✅ Downloaded {len(df)} rows from S3 fallback (root bucket)")
                     
-                    # Save locally if enabled
-                    if download_reports_locally:
-                        csv_filename = f"campaign-reporting/raw/northbeam/northbeam_{self._format_date_for_filename(start_date)}-{self._format_date_for_filename(end_date)}.csv"
-                        os.makedirs(f"campaign-reporting/raw/northbeam", exist_ok=True)
-                        df.to_csv(csv_filename, index=False)
-                        print(f"💾 Saved Northbeam CSV locally: {csv_filename}")
-                    
-                    # Also save to organized S3 folder for future cache hits
+                    # Save to organized S3 folder for future cache hits
                     try:
                         s3_key = f"campaign-reporting/raw/northbeam/northbeam_{self._format_date_for_filename(start_date)}-{self._format_date_for_filename(end_date)}.csv"
                         self.save_to_s3(df, s3_key, content_type='text/csv')
@@ -356,8 +341,7 @@ class NorthbeamClient:
             print(f"❌ S3 fallback failed: {e}")
             return None
     
-    def fetch_data(self, start_date: date, end_date: date, 
-                   download_reports_locally: bool = True) -> Optional[pd.DataFrame]:
+    def fetch_data(self, start_date: date, end_date: date) -> Optional[pd.DataFrame]:
         """Fetch Northbeam data for the specified date range with retry logic"""
         
         if not start_date or not end_date:
@@ -387,7 +371,7 @@ class NorthbeamClient:
                 
                 # Download data with progressive timeout but consistent poll_interval
                 timeout_seconds = timeout_strategies[min(attempt - 1, len(timeout_strategies) - 1)]
-                df = self.download_export_data(export_id, start_date, end_date, timeout_seconds, self.poll_interval, download_reports_locally)
+                df = self.download_export_data(export_id, start_date, end_date, timeout_seconds, self.poll_interval)
                 
                 if df is not None:
                     # Filter and process the data
@@ -526,9 +510,9 @@ def download_export_data(export_id, start_date, end_date, timeout_seconds=20, po
     client = NorthbeamClient()
     return client.download_export_data(export_id, start_date, end_date, timeout_seconds, poll_interval)
 
-def fetch_northbeam_data(date_from=None, date_to=None, download_reports_locally=True, 
+def fetch_northbeam_data(date_from=None, date_to=None, 
                         attribution_model="last_touch_non_direct", attribution_window="1",
                         accounting_mode_api="accrual", platform="fb"):
     """Fetch Northbeam data (backward compatibility)"""
     client = NorthbeamClient(attribution_model, attribution_window, accounting_mode_api, platform)
-    return client.fetch_data(date_from, date_to, download_reports_locally)
+    return client.fetch_data(date_from, date_to)

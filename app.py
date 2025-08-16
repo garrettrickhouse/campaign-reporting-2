@@ -757,7 +757,7 @@ def fetch_northbeam_data(date_from=None, date_to=None):
             accounting_mode_api=NORTHBEAM_ACCOUNTING_MODE_API,
             platform=NORTHBEAM_PLATFORM
         )
-        return client.fetch_data(date_from, date_to, DOWNLOAD_REPORTS_LOCALLY)
+        return client.fetch_data(date_from, date_to)
     except Exception as e:
         print(f"❌ Error creating Northbeam client: {e}")
         return None
