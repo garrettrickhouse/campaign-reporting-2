@@ -762,7 +762,7 @@ def fetch_northbeam_data(date_from=None, date_to=None):
         print(f"❌ Error creating Northbeam client: {e}")
         return None
 
-def fetch_all_data_concurrently(date_from=None, date_to=None, use_cached_files=True, use_meta=True, use_northbeam=True):
+def fetch_all_data_concurrently(date_from=None, date_to=None, use_cached_files=True, use_meta=False, use_northbeam=True):
     """
     Fetch all required data concurrently and return comprehensive ad objects.
     Process: Check existing data → Fetch missing data concurrently → Return data immediately
@@ -785,9 +785,7 @@ def fetch_all_data_concurrently(date_from=None, date_to=None, use_cached_files=T
     date_from_formatted = format_date_for_filename(date_from)
     date_to_formatted = format_date_for_filename(date_to)
     
-    # Check for existing raw data files
-    meta_insights_file = f"{ROOT_DIRECTORY}/raw/meta_insights/meta_insights_{date_from_formatted}-{date_to_formatted}.json"
-    northbeam_file = f"{ROOT_DIRECTORY}/raw/northbeam/northbeam_{date_from_formatted}-{date_to_formatted}.csv"
+    # Check for existing raw data files (S3 only)
     
     existing_files = {
         'meta_insights': None,
@@ -807,19 +805,9 @@ def fetch_all_data_concurrently(date_from=None, date_to=None, use_cached_files=T
         except Exception as e:
             print(f"⚠️ Error loading existing Meta insights from S3: {e}")
     else:
-        print(f"📁 Meta insights not found in organized S3 folder (campaign-reporting/raw/meta_insights/)")
+        print(f"❌ Meta insights not found in organized S3 folder (campaign-reporting/raw/meta_insights/)")
     
-    # Fallback to local Meta insights file (only if local saving is enabled)
-    if DOWNLOAD_REPORTS_LOCALLY and existing_files['meta_insights'] is None:
-        if os.path.exists(meta_insights_file):
-            try:
-                with open(meta_insights_file, 'r') as f:
-                    existing_files['meta_insights'] = json.load(f)
-                print(f"✅ Found existing Meta insights locally: {len(existing_files['meta_insights'])} ads")
-            except Exception as e:
-                print(f"⚠️ Error loading existing Meta insights: {e}")
-        else:
-            print(f"📁 Meta insights not found locally")
+    # No local file fallback - S3 only for production
     
     # Check for Northbeam data file in organized S3 folder (cache check)
     if file_exists_in_s3(s3_northbeam_key):
@@ -839,24 +827,9 @@ def fetch_all_data_concurrently(date_from=None, date_to=None, use_cached_files=T
         except Exception as e:
             print(f"⚠️ Error loading existing Northbeam data from S3: {e}")
     else:
-        print(f"📁 Northbeam data not found in organized S3 folder (campaign-reporting/raw/northbeam/)")
+        print(f"❌ Northbeam data not found in organized S3 folder (campaign-reporting/raw/northbeam/)")
     
-    # Fallback to local Northbeam data file (only if local saving is enabled)
-    if DOWNLOAD_REPORTS_LOCALLY and existing_files['northbeam_data'] is None:
-        print(f"🔍 Checking for local Northbeam data: {northbeam_file}")
-        if os.path.exists(northbeam_file):
-            try:
-                # Read CSV with specific dtype to ensure ID columns are treated as strings
-                existing_files['northbeam_data'] = pd.read_csv(northbeam_file, dtype={
-                    'ad_id': str,
-                    'campaign_id': str,
-                    'adset_id': str
-                })
-                print(f"✅ Found existing Northbeam data locally: {len(existing_files['northbeam_data'])} rows")
-            except Exception as e:
-                print(f"⚠️ Error loading existing Northbeam data: {e}")
-        else:
-            print(f"📁 Northbeam data not found locally")
+    # No local file fallback - S3 only for production
     
     # Initialize with existing data
     meta_insights = existing_files['meta_insights']
@@ -969,16 +942,14 @@ def fetch_all_data_sequentially(date_from=None, date_to=None, use_cached_files=T
     date_from_formatted = format_date_for_filename(date_from)
     date_to_formatted = format_date_for_filename(date_to)
     
-    # Check for existing raw data files
-    meta_insights_file = f"{ROOT_DIRECTORY}/raw/meta_insights/meta_insights_{date_from_formatted}-{date_to_formatted}.json"
-    northbeam_file = f"{ROOT_DIRECTORY}/raw/northbeam/northbeam_{date_from_formatted}-{date_to_formatted}.csv"
+    # Check for existing raw data files (S3 only)
     
     existing_files = {
         'meta_insights': None,
         'northbeam_data': None
     }
     
-    # Check which files exist (S3 first, then local fallback)
+    # Check which files exist (S3 only)
     s3_meta_key = f"{ROOT_DIRECTORY}/raw/meta_insights/meta_insights_{date_from_formatted}-{date_to_formatted}.json"
     s3_northbeam_key = f"{ROOT_DIRECTORY}/raw/northbeam/northbeam_{date_from_formatted}-{date_to_formatted}.csv"
     
@@ -994,20 +965,9 @@ def fetch_all_data_sequentially(date_from=None, date_to=None, use_cached_files=T
     else:
         print(f"❌ Meta insights not found in S3")
     
-    # Fallback to local Meta insights file (only if local saving is enabled)
-    if DOWNLOAD_REPORTS_LOCALLY and existing_files['meta_insights'] is None:
-        # print(f"🔍 Checking for local Meta insights: {meta_insights_file}")
-        if os.path.exists(meta_insights_file):
-            try:
-                with open(meta_insights_file, 'r') as f:
-                    existing_files['meta_insights'] = json.load(f)
-                print(f"✅ Found existing Meta insights locally: {len(existing_files['meta_insights'])} ads")
-            except Exception as e:
-                print(f"⚠️ Error loading existing Meta insights: {e}")
-        else:
-            print(f"📁 Meta insights not found locally")
+    # No local file fallback - S3 only for production
     
-    # Check for Northbeam data file (S3 first, then local fallback)
+    # Check for Northbeam data file (S3 only)
     # print(f"🔍 Checking for Northbeam data: {s3_northbeam_key}")
     if file_exists_in_s3(s3_northbeam_key):
         try:
@@ -1028,22 +988,7 @@ def fetch_all_data_sequentially(date_from=None, date_to=None, use_cached_files=T
     else:
         print(f"❌ Northbeam data not found in S3")
     
-    # Fallback to local Northbeam data file (only if local saving is enabled)
-    if DOWNLOAD_REPORTS_LOCALLY and existing_files['northbeam_data'] is None:
-        print(f"🔍 Checking for local Northbeam data: {northbeam_file}")
-        if os.path.exists(northbeam_file):
-            try:
-                # Read CSV with specific dtype to ensure ID columns are treated as strings
-                existing_files['northbeam_data'] = pd.read_csv(northbeam_file, dtype={
-                    'ad_id': str,
-                    'campaign_id': str,
-                    'adset_id': str
-                })
-                print(f"✅ Found existing Northbeam data locally: {len(existing_files['northbeam_data'])} rows")
-            except Exception as e:
-                print(f"⚠️ Error loading existing Northbeam data: {e}")
-        else:
-            print(f"📁 Northbeam data not found locally")
+    # No local file fallback - S3 only for production
     
     # Initialize with existing data
     meta_insights = existing_files['meta_insights']
@@ -1102,7 +1047,7 @@ def merge_data(northbeam_data, meta_data, date_from=None, date_to=None):
     
     # Handle empty or None Northbeam data gracefully
     if northbeam_data is None or (isinstance(northbeam_data, pd.DataFrame) and len(northbeam_data) == 0):
-        print("⚠️ No Northbeam data available - creating Meta-only comprehensive ads")
+        print("⚠️ No Northbeam data available")
         northbeam_list = []
     else:
         # Convert northbeam_data DataFrame to list of dictionaries if needed
@@ -1110,6 +1055,14 @@ def merge_data(northbeam_data, meta_data, date_from=None, date_to=None):
             northbeam_list = northbeam_data.to_dict('records')
         else:
             northbeam_list = northbeam_data
+    
+    # Handle empty or None Meta data gracefully
+    if meta_data is None:
+        print("⚠️ No Meta data available")
+    elif isinstance(meta_data, list) and len(meta_data) == 0:
+        print("⚠️ Meta data is empty list")
+    else:
+        print(f"📊 Meta data available: {len(meta_data) if meta_data else 0} ads")
     
     # Create lookup dictionaries
     northbeam_lookup = {}
@@ -1119,14 +1072,19 @@ def merge_data(northbeam_data, meta_data, date_from=None, date_to=None):
             northbeam_lookup[ad_id] = item
     
     meta_lookup = {}
-    for item in meta_data:
-        ad_id = str(item.get('ad_id', ''))
-        if ad_id:
-            meta_lookup[ad_id] = item
+    if meta_data is not None:
+        for item in meta_data:
+            ad_id = str(item.get('ad_id', ''))
+            if ad_id:
+                meta_lookup[ad_id] = item
     
     # Merge data
     comprehensive_ads = []
     all_ad_ids = set(northbeam_lookup.keys()) | set(meta_lookup.keys())
+    
+    if not all_ad_ids:
+        print("⚠️ No ads found in either data source")
+        return comprehensive_ads
     
     for ad_id in all_ad_ids:
         northbeam_item = northbeam_lookup.get(ad_id, {})
@@ -1195,7 +1153,7 @@ def merge_data(northbeam_data, meta_data, date_from=None, date_to=None):
         
         comprehensive_ads.append(ad_object)
     
-    print("✅ Merged Northbeam and Meta data")
+    print(f"✅ Merged Northbeam and Meta data - {len(comprehensive_ads)} ads created")
 
     return comprehensive_ads
 
@@ -3752,7 +3710,7 @@ def main():
     
     # Initialize data source session state if not exists
     if 'use_meta' not in st.session_state:
-        st.session_state.use_meta = True
+        st.session_state.use_meta = False  # Default to False - only Northbeam
     if 'use_northbeam' not in st.session_state:
         st.session_state.use_northbeam = DEFAULT_USE_NORTHBEAM_DATA
     
@@ -3761,7 +3719,7 @@ def main():
     
     # Ensure at least one source is always selected
     if not st.session_state.use_meta and not st.session_state.use_northbeam:
-        st.session_state.use_meta = True
+        st.session_state.use_northbeam = True  # Default to Northbeam if nothing selected
     
     use_meta = st.sidebar.checkbox(
         "Meta", 
@@ -3775,6 +3733,12 @@ def main():
         help="Fetch data from Northbeam API for spend/revenue metrics in the next report"
     )
     
+    if use_northbeam != st.session_state.use_northbeam:
+        st.session_state.use_northbeam = use_northbeam
+        if not use_meta and not use_northbeam:
+            st.session_state.use_meta = True
+            use_meta = True
+        
     # Update session state and ensure at least one source is selected
     if use_meta != st.session_state.use_meta:
         st.session_state.use_meta = use_meta
@@ -3782,11 +3746,7 @@ def main():
             st.session_state.use_northbeam = True
             use_northbeam = True
     
-    if use_northbeam != st.session_state.use_northbeam:
-        st.session_state.use_northbeam = use_northbeam
-        if not use_meta and not use_northbeam:
-            st.session_state.use_meta = True
-            use_meta = True
+
     
     
     use_cached_files = st.sidebar.checkbox("Use Cached Files", value=True, key="use_cached_files", 

@@ -23,12 +23,21 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # Northbeam configuration constants - these will be passed in from the calling application
+# 
+# Brand Name Configuration:
+# - Set NORTHBEAM_BRAND_NAME in your .env file (e.g., NORTHBEAM_BRAND_NAME=thrivecausemetics)
+# - If not set, defaults to "unknown"
+# - Can also be passed explicitly when creating NorthbeamClient instance
+# 
+# File Organization:
+# - Northbeam exports are saved directly to: northbeam_exports/{brand_name}_northbeam_{dates}
+# - Cache files are saved to: campaign-reporting/raw/northbeam/northbeam_{dates}
 
 class NorthbeamClient:
     """Client for interacting with Northbeam API and managing exports"""
     
     def __init__(self, attribution_model="last_touch_non_direct", attribution_window="1", 
-                 accounting_mode_api="accrual", platform="fb"):
+                 accounting_mode_api="accrual", platform="fb", brand_name="unknown"):
         """Initialize Northbeam client with configuration from environment and parameters"""
         # Northbeam API configuration
         self.client_id = os.getenv('NORTHBEAM_DATA_CLIENT_ID')
@@ -53,6 +62,9 @@ class NorthbeamClient:
         self.attribution_window = attribution_window
         self.accounting_mode_api = accounting_mode_api
         self.platform = platform
+        
+        # Brand name: environment variable first, then parameter, then default
+        self.brand_name = os.getenv('NORTHBEAM_BRAND_NAME', brand_name)
         
         # Validate required configuration
         if not all([self.client_id, self.api_key, self.platform_account_id]):
@@ -106,8 +118,8 @@ class NorthbeamClient:
                 "include_kind_and_platform": True
             },
             "time_granularity": "DAILY",
-            "export_file_name": f"northbeam_{self._format_date_for_filename(start_date)}-{self._format_date_for_filename(end_date)}",
-            "bucket_name": self.s3_bucket,
+            "export_file_name": f"{self.brand_name}_northbeam_{self._format_date_for_filename(start_date)}-{self._format_date_for_filename(end_date)}",
+            "bucket_name": f"{self.s3_bucket}/northbeam_exports",
             "aws_role": "arn:aws:iam::881825931691:role/NorthbeamS3ExportRole",
             "level": "ad",
             "metrics": [
@@ -287,17 +299,16 @@ class NorthbeamClient:
                 print(f"✅ Downloaded {len(df)} rows from existing S3 data")
                 return df
             
-            # Fallback to checking for Northbeam export files in the root bucket
-            print(f"🔍 Searching root bucket for Northbeam export files with date range {start_date} to {end_date}...")
-            response = s3_client.list_objects_v2(Bucket=self.s3_bucket, MaxKeys=1000)
+            # Check for Northbeam export files in the northbeam_exports folder with the new naming pattern
+            print(f"🔍 Searching northbeam_exports folder for Northbeam export files with date range {start_date} to {end_date}...")
+            response = s3_client.list_objects_v2(Bucket=self.s3_bucket, Prefix="northbeam_exports/", MaxKeys=1000)
             
             if 'Contents' in response:
                 matching_files = []
                 for obj in response['Contents']:
                     key = obj['Key']
-                    # Look for Northbeam export files in root bucket that contain the date range
-                    # These files may have timestamps (e.g., northbeam_20250808-20250814_14_12_11.csv)
-                    if (key.startswith('northbeam_') and 
+                    # Look for Northbeam export files with the new naming pattern: {brand_name}_northbeam_{start_date}-{end_date}
+                    if (key.startswith(f'{self.brand_name}_northbeam_') and 
                         key.endswith('.csv') and
                         f"{self._format_date_for_filename(start_date)}" in key and
                         f"{self._format_date_for_filename(end_date)}" in key):
@@ -330,12 +341,9 @@ class NorthbeamClient:
                         print(f"⚠️ Could not save to organized S3 folder: {e}")
                     
                     return df
-                else:
-                    print(f"❌ No matching Northbeam files found in S3 for date range {start_date} to {end_date}")
-                    return None
-            else:
-                print("❌ No files found in S3 bucket")
-                return None
+            
+            print(f"❌ No matching Northbeam files found in S3 for date range {start_date} to {end_date}")
+            return None
                 
         except Exception as e:
             print(f"❌ S3 fallback failed: {e}")
@@ -490,29 +498,29 @@ class NorthbeamClient:
 
 
 # Convenience functions for backward compatibility
-def get_northbeam_headers():
+def get_northbeam_headers(brand_name="unknown"):
     """Get headers for Northbeam API (backward compatibility)"""
-    client = NorthbeamClient()
+    client = NorthbeamClient(brand_name=brand_name)
     return client.get_headers()
 
-def create_northbeam_export(start_date, end_date):
+def create_northbeam_export(start_date, end_date, brand_name="unknown"):
     """Create a Northbeam export (backward compatibility)"""
-    client = NorthbeamClient()
+    client = NorthbeamClient(brand_name=brand_name)
     return client.create_export(start_date, end_date)
 
-def poll_northbeam_export_status(export_id, timeout_seconds=20, poll_interval=5):
+def poll_northbeam_export_status(export_id, timeout_seconds=20, poll_interval=5, brand_name="unknown"):
     """Poll Northbeam for export status (backward compatibility)"""
-    client = NorthbeamClient()
+    client = NorthbeamClient(brand_name=brand_name)
     return client.poll_export_status(export_id, timeout_seconds, poll_interval)
 
-def download_export_data(export_id, start_date, end_date, timeout_seconds=20, poll_interval=5):
+def download_export_data(export_id, start_date, end_date, timeout_seconds=20, poll_interval=5, brand_name="unknown"):
     """Download export data (backward compatibility)"""
-    client = NorthbeamClient()
+    client = NorthbeamClient(brand_name=brand_name)
     return client.download_export_data(export_id, start_date, end_date, timeout_seconds, poll_interval)
 
 def fetch_northbeam_data(date_from=None, date_to=None, 
                         attribution_model="last_touch_non_direct", attribution_window="1",
-                        accounting_mode_api="accrual", platform="fb"):
+                        accounting_mode_api="accrual", platform="fb", brand_name="unknown"):
     """Fetch Northbeam data (backward compatibility)"""
-    client = NorthbeamClient(attribution_model, attribution_window, accounting_mode_api, platform)
+    client = NorthbeamClient(attribution_model, attribution_window, accounting_mode_api, platform, brand_name)
     return client.fetch_data(date_from, date_to)
