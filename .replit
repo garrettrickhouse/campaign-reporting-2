@@ -1,0 +1,25 @@
+modules = ["python-3.12", "cpp-clang14", "c-clang14", "nodejs-20"]
+run = "streamlit run app.py"
+
+[nix]
+channel = "stable-25_05"
+packages = ["glibcLocales"]
+
+[deployment]
+run = ["sh", "-c", "streamlit run app.py"]
+
+[[ports]]
+localPort = 8501
+externalPort = 80
+
+[workflows]
+runButton = "Run"
+
+[[workflows.workflow]]
+name = "Run"
+author = 20925659
+mode = "sequential"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "streamlit run app.py"
