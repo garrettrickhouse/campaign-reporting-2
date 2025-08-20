@@ -6,7 +6,8 @@ textColor = "#1A1A1A"
 font = "sans serif"
 
 [server]
-port = 8503
+port = 8501
+address = "0.0.0.0"
 
 [browser]
 gatherUsageStats = false 
