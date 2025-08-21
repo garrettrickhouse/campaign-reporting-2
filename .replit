@@ -6,7 +6,7 @@ channel = "stable-25_05"
 packages = ["glibcLocales"]
 
 [deployment]
-run = ["sh", "-c", "streamlit run app.py"]
+run = ["sh", "-c", "streamlit run app.py --server.address 0.0.0.0 --server.headless true --server.enableCORS=false --server.enableWebsocketCompression=false --server.port 8501"]
 
 [[ports]]
 localPort = 8501
