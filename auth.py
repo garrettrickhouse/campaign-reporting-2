@@ -64,7 +64,7 @@ def show_login_page():
 def check_password(password):
     """Check if the provided password is correct"""
     # Get password from environment variable, fallback to a default
-    correct_password = os.getenv('APP_PASSWORD', 'jonesroad2024')
+    correct_password = os.getenv('APP_PASSWORD', 'rickhouse')
     
     # Simple password comparison
     return password == correct_password

@@ -3138,10 +3138,8 @@ def display_campaign_explorer_tab(ad_objects, top_n=DEFAULT_TOP_N, core_products
                     
                     target_roas = get_target_roas(campaign)
 
-                    # Top N Ads for selected campaign and product
                     
-
-                    # Filter ads that meet or exceed ROAS goal for this campaign
+                    # Now show the Top N Ads table (only if ads meet the ROAS threshold)
                     if target_roas is not None:
                         st.subheader(f"🏆 Top {top_n} Spending Ads (> {target_roas} ROAS)")
                         roas_goal_ads = []
@@ -3152,103 +3150,19 @@ def display_campaign_explorer_tab(ad_objects, top_n=DEFAULT_TOP_N, core_products
                         
                         if not roas_goal_ads:
                             st.info(f"No ads found for {product} in {campaign} campaign that meet the ROAS goal of {target_roas}")
-                            continue
-                                                
-                        # Use filtered ads for top N table
-                        filtered_ads = roas_goal_ads
-                    else:
-                        # No ROAS target defined, use all ads
-                        st.subheader(f"🏆 Top {top_n} Spending Ads")
-                        filtered_ads = product_ads
-                        st.info(f"No ROAS target defined for {campaign} campaign type")
-                    
-                    # Create ads dataframe for the filtered data
-                    ads_data = []
-                    for ad in filtered_ads:
-                        # Get ad URL from processed data
-                        ad_id = ad['ad_ids'].get('ad_id', '')
-                        ad_type = ad['metadata'].get('ad_type', 'Unknown')
-                        primary_url, thumbnail_url = get_ad_url(ad_id, ad_type) if ad_id else ("", "")
-
-                        ads_data.append({
-                            'Thumbnail': get_thumbnail_url_from_cache(ad_id),
-                            'Link': primary_url,
-                            'Ad Type': ad['metadata'].get('ad_type', 'Unknown'),
-                            'Ad Name': ad['ad_ids']['ad_name'],
-                            'Merged': ad.get('merged_count', 1),  # Show how many ads were merged
-                            'Product': ad['metadata'].get('product', 'Unknown'),
-                            'Creator': ad['metadata'].get('creator', 'Unknown'),
-                            'Agency': ad['metadata'].get('agency', 'Unknown'),
-                            'Spend': get_metric_value(ad, 'spend', data_source),
-                            'Revenue': get_metric_value(ad, 'attributed_rev', data_source),
-                            'Transactions': get_metric_value(ad, 'transactions', data_source),
-                            'Impressions': get_metric_value(ad, 'impressions', data_source),
-                            'Link Clicks': get_metric_value(ad, 'meta_link_clicks', data_source),
-                            'Video Views': get_metric_value(ad, 'meta_3s_video_views', data_source),
-                            'ROAS': get_metric_value(ad, 'roas', data_source),
-                            'CTR': (get_metric_value(ad, 'meta_link_clicks', data_source) / get_metric_value(ad, 'impressions', data_source) * 100) if get_metric_value(ad, 'impressions', data_source) > 0 else 0,
-                            'CPM': (get_metric_value(ad, 'spend', data_source) / get_metric_value(ad, 'impressions', data_source) * 1000) if get_metric_value(ad, 'impressions', data_source) > 0 else 0,
-                            'Thumbstop': (get_metric_value(ad, 'meta_3s_video_views', data_source) / get_metric_value(ad, 'impressions', data_source) * 100) if get_metric_value(ad, 'impressions', data_source) > 0 else 0,
-                            'AOV': get_metric_value(ad, 'attributed_rev', data_source) / get_metric_value(ad, 'transactions', data_source) if get_metric_value(ad, 'transactions', data_source) > 0 else 0
-                        })
-                    
-                    ads_df = pd.DataFrame(ads_data)
-                    # Sort by raw numeric values before formatting
-                    ads_df = ads_df.sort_values('Spend', ascending=False)
-                    
-                    # Show top N ads from the filtered results
-                    display_ads_df = ads_df.head(top_n).copy()
-                    
-                    if not display_ads_df.empty:
-                        # Format the dataframe for display
-                        display_ads_df_formatted = display_ads_df.copy()
-                        display_ads_df_formatted['Spend'] = display_ads_df_formatted['Spend'].apply(format_currency)
-                        display_ads_df_formatted['Revenue'] = display_ads_df_formatted['Revenue'].apply(format_currency)
-                        display_ads_df_formatted['ROAS'] = display_ads_df_formatted['ROAS'].apply(format_roas)
-                        display_ads_df_formatted['CTR'] = display_ads_df_formatted['CTR'].apply(format_percentage)
-                        display_ads_df_formatted['CPM'] = display_ads_df_formatted['CPM'].apply(format_currency)
-                        display_ads_df_formatted['Thumbstop'] = display_ads_df_formatted['Thumbstop'].apply(format_percentage)
-                        display_ads_df_formatted['AOV'] = display_ads_df_formatted['AOV'].apply(format_currency)
-                        display_ads_df_formatted['Transactions'] = display_ads_df_formatted['Transactions'].apply(format_large_number)
-                        display_ads_df_formatted['Impressions'] = display_ads_df_formatted['Impressions'].apply(format_large_number)
-                        display_ads_df_formatted['Link Clicks'] = display_ads_df_formatted['Link Clicks'].apply(format_large_number)
-                        display_ads_df_formatted['Video Views'] = display_ads_df_formatted['Video Views'].apply(format_large_number)
-                        
-                        # Use LinkColumn for clickable URLs
-                        st.dataframe(
-                            display_ads_df_formatted,
-                            column_config={
-                                "Thumbnail": st.column_config.ImageColumn(
-                                    "Thumbnail",
-                                    width="small",
-                                    pinned="left"
-                                ),
-                                "Ad Type": st.column_config.TextColumn(
-                                    "Ad Type",
-                                    pinned="left"
-                                ),
-                                "Link": st.column_config.LinkColumn(
-                                    "Link",
-                                    help="Click to view ad preview",
-                                    display_text="🔗",
-                                    pinned="left"
-                                )
-                            },
-                            use_container_width=True,
-                            hide_index=True
-                        )
-                        
-                        # Show all ads in expander (unfiltered - all ads for this campaign/product)
-                        with st.expander(f"📊 Show all {len(product_ads)} ads"):
-                            # Create ads dataframe for ALL ads (unfiltered)
-                            all_ads_data = []
-                            for ad in product_ads:
+                        else:
+                            # Use filtered ads for top N table
+                            filtered_ads = roas_goal_ads
+                            
+                            # Create ads dataframe for the filtered data
+                            ads_data = []
+                            for ad in filtered_ads:
                                 # Get ad URL from processed data
                                 ad_id = ad['ad_ids'].get('ad_id', '')
                                 ad_type = ad['metadata'].get('ad_type', 'Unknown')
                                 primary_url, thumbnail_url = get_ad_url(ad_id, ad_type) if ad_id else ("", "")
 
-                                all_ads_data.append({
+                                ads_data.append({
                                     'Thumbnail': get_thumbnail_url_from_cache(ad_id),
                                     'Link': primary_url,
                                     'Ad Type': ad['metadata'].get('ad_type', 'Unknown'),
@@ -3258,38 +3172,123 @@ def display_campaign_explorer_tab(ad_objects, top_n=DEFAULT_TOP_N, core_products
                                     'Creator': ad['metadata'].get('creator', 'Unknown'),
                                     'Agency': ad['metadata'].get('agency', 'Unknown'),
                                     'Spend': get_metric_value(ad, 'spend', data_source),
-                                    'ROAS': get_metric_value(ad, 'roas', data_source),
-                                    'CTR': (get_metric_value(ad, 'meta_link_clicks', data_source) / get_metric_value(ad, 'impressions', data_source) * 100) if get_metric_value(ad, 'impressions', data_source) > 0 else 0,
-                                    'CPM': (get_metric_value(ad, 'spend', data_source) / get_metric_value(ad, 'impressions', data_source) * 1000) if get_metric_value(ad, 'impressions', data_source) > 0 else 0,
-                                    'Thumbstop': (get_metric_value(ad, 'meta_3s_video_views', data_source) / get_metric_value(ad, 'impressions', data_source) * 100) if get_metric_value(ad, 'meta_3s_video_views', data_source) > 0 else 0,
-                                    'AOV': get_metric_value(ad, 'attributed_rev', data_source) / get_metric_value(ad, 'transactions', data_source) if get_metric_value(ad, 'transactions', data_source) > 0 else 0,
                                     'Revenue': get_metric_value(ad, 'attributed_rev', data_source),
                                     'Transactions': get_metric_value(ad, 'transactions', data_source),
                                     'Impressions': get_metric_value(ad, 'impressions', data_source),
                                     'Link Clicks': get_metric_value(ad, 'meta_link_clicks', data_source),
-                                    'Video Views': get_metric_value(ad, 'meta_3s_video_views', data_source)
+                                    'Video Views': get_metric_value(ad, 'meta_3s_video_views', data_source),
+                                    'ROAS': get_metric_value(ad, 'roas', data_source),
+                                    'CTR': (get_metric_value(ad, 'meta_link_clicks', data_source) / get_metric_value(ad, 'impressions', data_source) * 100) if get_metric_value(ad, 'impressions', data_source) > 0 else 0,
+                                    'CPM': (get_metric_value(ad, 'spend', data_source) / get_metric_value(ad, 'impressions', data_source) * 1000) if get_metric_value(ad, 'impressions', data_source) > 0 else 0,
+                                    'Thumbstop': (get_metric_value(ad, 'meta_3s_video_views', data_source) / get_metric_value(ad, 'impressions', data_source) * 100) if get_metric_value(ad, 'impressions', data_source) > 0 else 0,
+                                    'AOV': get_metric_value(ad, 'attributed_rev', data_source) / get_metric_value(ad, 'transactions', data_source) if get_metric_value(ad, 'transactions', data_source) > 0 else 0
                                 })
                             
-                            all_ads_df = pd.DataFrame(all_ads_data)
+                            ads_df = pd.DataFrame(ads_data)
                             # Sort by raw numeric values before formatting
-                            all_ads_df = all_ads_df.sort_values('Spend', ascending=False)
+                            ads_df = ads_df.sort_values('Spend', ascending=False)
                             
-                            # Format the display values for all ads
-                            display_all_ads_df = all_ads_df.copy()
-                            display_all_ads_df['Spend'] = display_all_ads_df['Spend'].apply(format_currency)
-                            display_all_ads_df['Revenue'] = display_all_ads_df['Revenue'].apply(format_currency)
-                            display_all_ads_df['ROAS'] = display_all_ads_df['ROAS'].apply(format_roas)
-                            display_all_ads_df['CTR'] = display_all_ads_df['CTR'].apply(format_percentage)
-                            display_all_ads_df['CPM'] = display_all_ads_df['CPM'].apply(format_currency)
-                            display_all_ads_df['Thumbstop'] = display_all_ads_df['Thumbstop'].apply(format_percentage)
-                            display_all_ads_df['AOV'] = display_all_ads_df['AOV'].apply(format_currency)
-                            display_all_ads_df['Transactions'] = display_all_ads_df['Transactions'].apply(format_large_number)
-                            display_all_ads_df['Impressions'] = display_all_ads_df['Impressions'].apply(format_large_number)
-                            display_all_ads_df['Link Clicks'] = display_all_ads_df['Link Clicks'].apply(format_large_number)
-                            display_all_ads_df['Video Views'] = display_all_ads_df['Video Views'].apply(format_large_number)
+                            # Show top N ads from the filtered results
+                            display_ads_df = ads_df.head(top_n).copy()
                             
+                            if not display_ads_df.empty:
+                                # Format the dataframe for display
+                                display_ads_df_formatted = display_ads_df.copy()
+                                display_ads_df_formatted['Spend'] = display_ads_df_formatted['Spend'].apply(format_currency)
+                                display_ads_df_formatted['Revenue'] = display_ads_df_formatted['Revenue'].apply(format_currency)
+                                display_ads_df_formatted['ROAS'] = display_ads_df_formatted['ROAS'].apply(format_roas)
+                                display_ads_df_formatted['CTR'] = display_ads_df_formatted['CTR'].apply(format_percentage)
+                                display_ads_df_formatted['CPM'] = display_ads_df_formatted['CPM'].apply(format_currency)
+                                display_ads_df_formatted['Thumbstop'] = display_ads_df_formatted['Thumbstop'].apply(format_percentage)
+                                display_ads_df_formatted['AOV'] = display_ads_df_formatted['AOV'].apply(format_currency)
+                                display_ads_df_formatted['Transactions'] = display_ads_df_formatted['Transactions'].apply(format_large_number)
+                                display_ads_df_formatted['Impressions'] = display_ads_df_formatted['Impressions'].apply(format_large_number)
+                                display_ads_df_formatted['Link Clicks'] = display_ads_df_formatted['Link Clicks'].apply(format_large_number)
+                                display_ads_df_formatted['Video Views'] = display_ads_df_formatted['Video Views'].apply(format_large_number)
+                                
+                                # Use LinkColumn for clickable URLs
+                                st.dataframe(
+                                    display_ads_df_formatted,
+                                    column_config={
+                                        "Thumbnail": st.column_config.ImageColumn(
+                                            "Thumbnail",
+                                            width="small",
+                                            pinned="left"
+                                        ),
+                                        "Ad Type": st.column_config.TextColumn(
+                                            "Ad Type",
+                                            pinned="left"
+                                        ),
+                                        "Link": st.column_config.LinkColumn(
+                                            "Link",
+                                            help="Click to view ad preview",
+                                            display_text="🔗",
+                                            pinned="left"
+                                        )
+                                    },
+                                    use_container_width=True,
+                                    hide_index=True
+                                )
+                    else:
+                        # No ROAS target defined, use all ads
+                        st.subheader(f"🏆 Top {top_n} Spending Ads")
+                        st.info(f"No ROAS target defined for {campaign} campaign type")
+                        
+                        # Create ads dataframe for all ads
+                        ads_data = []
+                        for ad in product_ads:
+                            # Get ad URL from processed data
+                            ad_id = ad['ad_ids'].get('ad_id', '')
+                            ad_type = ad['metadata'].get('ad_type', 'Unknown')
+                            primary_url, thumbnail_url = get_ad_url(ad_id, ad_type) if ad_id else ("", "")
+
+                            ads_data.append({
+                                'Thumbnail': get_thumbnail_url_from_cache(ad_id),
+                                'Link': primary_url,
+                                'Ad Type': ad['metadata'].get('ad_type', 'Unknown'),
+                                'Ad Name': ad['ad_ids']['ad_name'],
+                                'Merged': ad.get('merged_count', 1),  # Show how many ads were merged
+                                'Product': ad['metadata'].get('product', 'Unknown'),
+                                'Creator': ad['metadata'].get('creator', 'Unknown'),
+                                'Agency': ad['metadata'].get('agency', 'Unknown'),
+                                'Spend': get_metric_value(ad, 'spend', data_source),
+                                'Revenue': get_metric_value(ad, 'attributed_rev', data_source),
+                                'Transactions': get_metric_value(ad, 'transactions', data_source),
+                                'Impressions': get_metric_value(ad, 'impressions', data_source),
+                                'Link Clicks': get_metric_value(ad, 'meta_link_clicks', data_source),
+                                'Video Views': get_metric_value(ad, 'meta_3s_video_views', data_source),
+                                'ROAS': get_metric_value(ad, 'roas', data_source),
+                                'CTR': (get_metric_value(ad, 'meta_link_clicks', data_source) / get_metric_value(ad, 'impressions', data_source) * 100) if get_metric_value(ad, 'impressions', data_source) > 0 else 0,
+                                'CPM': (get_metric_value(ad, 'spend', data_source) / get_metric_value(ad, 'impressions', data_source) * 1000) if get_metric_value(ad, 'impressions', data_source) > 0 else 0,
+                                'Thumbstop': (get_metric_value(ad, 'meta_3s_video_views', data_source) / get_metric_value(ad, 'impressions', data_source) * 100) if get_metric_value(ad, 'meta_3s_video_views', data_source) > 0 else 0,
+                                'AOV': get_metric_value(ad, 'attributed_rev', data_source) / get_metric_value(ad, 'transactions', data_source) if get_metric_value(ad, 'transactions', data_source) > 0 else 0
+                            })
+                        
+                        ads_df = pd.DataFrame(ads_data)
+                        # Sort by raw numeric values before formatting
+                        ads_df = ads_df.sort_values('Spend', ascending=False)
+                        
+                        # Show top N ads from all ads
+                        display_ads_df = ads_df.head(top_n).copy()
+                        
+                        if not display_ads_df.empty:
+                            # Format the dataframe for display
+                            display_ads_df_formatted = display_ads_df.copy()
+                            display_ads_df_formatted['Spend'] = display_ads_df_formatted['Spend'].apply(format_currency)
+                            display_ads_df_formatted['Revenue'] = display_ads_df_formatted['Revenue'].apply(format_currency)
+                            display_ads_df_formatted['ROAS'] = display_ads_df_formatted['ROAS'].apply(format_roas)
+                            display_ads_df_formatted['CTR'] = display_ads_df_formatted['CTR'].apply(format_percentage)
+                            display_ads_df_formatted['CPM'] = display_ads_df_formatted['CPM'].apply(format_currency)
+                            display_ads_df_formatted['Thumbstop'] = display_ads_df_formatted['Thumbstop'].apply(format_percentage)
+                            display_ads_df_formatted['AOV'] = display_ads_df_formatted['AOV'].apply(format_currency)
+                            display_ads_df_formatted['Transactions'] = display_ads_df_formatted['Transactions'].apply(format_large_number)
+                            display_ads_df_formatted['Impressions'] = display_ads_df_formatted['Impressions'].apply(format_large_number)
+                            display_ads_df_formatted['Link Clicks'] = display_ads_df_formatted['Link Clicks'].apply(format_large_number)
+                            display_ads_df_formatted['Video Views'] = display_ads_df_formatted['Video Views'].apply(format_large_number)
+                            
+                            # Use LinkColumn for clickable URLs
                             st.dataframe(
-                                display_all_ads_df,
+                                display_ads_df_formatted,
                                 column_config={
                                     "Thumbnail": st.column_config.ImageColumn(
                                         "Thumbnail",
@@ -3310,8 +3309,80 @@ def display_campaign_explorer_tab(ad_objects, top_n=DEFAULT_TOP_N, core_products
                                 use_container_width=True,
                                 hide_index=True
                             )
-                    else:
-                        st.info("No ads data available for the selected filters.")
+                    
+                    
+                    # Always show the "Show all ads" expander after the Top N table
+                    with st.expander(f"📊 Show all {len(product_ads)} ads"):
+                        # Create ads dataframe for ALL ads (unfiltered)
+                        all_ads_data = []
+                        for ad in product_ads:
+                            # Get ad URL from processed data
+                            ad_id = ad['ad_ids'].get('ad_id', '')
+                            ad_type = ad['metadata'].get('ad_type', 'Unknown')
+                            primary_url, thumbnail_url = get_ad_url(ad_id, ad_type) if ad_id else ("", "")
+
+                            all_ads_data.append({
+                                'Thumbnail': get_thumbnail_url_from_cache(ad_id),
+                                'Link': primary_url,
+                                'Ad Type': ad['metadata'].get('ad_type', 'Unknown'),
+                                'Ad Name': ad['ad_ids']['ad_name'],
+                                'Merged': ad.get('merged_count', 1),  # Show how many ads were merged
+                                'Product': ad['metadata'].get('product', 'Unknown'),
+                                'Creator': ad['metadata'].get('creator', 'Unknown'),
+                                'Agency': ad['metadata'].get('agency', 'Unknown'),
+                                'Spend': get_metric_value(ad, 'spend', data_source),
+                                'ROAS': get_metric_value(ad, 'roas', data_source),
+                                'CTR': (get_metric_value(ad, 'meta_link_clicks', data_source) / get_metric_value(ad, 'impressions', data_source) * 100) if get_metric_value(ad, 'impressions', data_source) > 0 else 0,
+                                'CPM': (get_metric_value(ad, 'spend', data_source) / get_metric_value(ad, 'impressions', data_source) * 1000) if get_metric_value(ad, 'impressions', data_source) > 0 else 0,
+                                'Thumbstop': (get_metric_value(ad, 'meta_3s_video_views', data_source) / get_metric_value(ad, 'impressions', data_source) * 100) if get_metric_value(ad, 'meta_3s_video_views', data_source) > 0 else 0,
+                                'AOV': get_metric_value(ad, 'attributed_rev', data_source) / get_metric_value(ad, 'transactions', data_source) if get_metric_value(ad, 'transactions', data_source) > 0 else 0,
+                                'Revenue': get_metric_value(ad, 'attributed_rev', data_source),
+                                'Transactions': get_metric_value(ad, 'transactions', data_source),
+                                'Impressions': get_metric_value(ad, 'impressions', data_source),
+                                'Link Clicks': get_metric_value(ad, 'meta_link_clicks', data_source),
+                                'Video Views': get_metric_value(ad, 'meta_3s_video_views', data_source)
+                            })
+                        
+                        all_ads_df = pd.DataFrame(all_ads_data)
+                        # Sort by raw numeric values before formatting
+                        all_ads_df = all_ads_df.sort_values('Spend', ascending=False)
+                        
+                        # Format the display values for all ads
+                        display_all_ads_df = all_ads_df.copy()
+                        display_all_ads_df['Spend'] = display_all_ads_df['Spend'].apply(format_currency)
+                        display_all_ads_df['Revenue'] = display_all_ads_df['Revenue'].apply(format_currency)
+                        display_all_ads_df['ROAS'] = display_all_ads_df['ROAS'].apply(format_roas)
+                        display_all_ads_df['CTR'] = display_all_ads_df['CTR'].apply(format_percentage)
+                        display_all_ads_df['CPM'] = display_all_ads_df['CPM'].apply(format_currency)
+                        display_all_ads_df['Thumbstop'] = display_all_ads_df['Thumbstop'].apply(format_percentage)
+                        display_all_ads_df['AOV'] = display_all_ads_df['AOV'].apply(format_currency)
+                        display_all_ads_df['Transactions'] = display_all_ads_df['Transactions'].apply(format_large_number)
+                        display_all_ads_df['Impressions'] = display_all_ads_df['Impressions'].apply(format_large_number)
+                        display_all_ads_df['Link Clicks'] = display_all_ads_df['Link Clicks'].apply(format_large_number)
+                        display_all_ads_df['Video Views'] = display_all_ads_df['Video Views'].apply(format_large_number)
+                        
+                        st.dataframe(
+                            display_all_ads_df,
+                            column_config={
+                                "Thumbnail": st.column_config.ImageColumn(
+                                    "Thumbnail",
+                                    width="small",
+                                    pinned="left"
+                                ),
+                                "Ad Type": st.column_config.TextColumn(
+                                    "Ad Type",
+                                    pinned="left"
+                                ),
+                                "Link": st.column_config.LinkColumn(
+                                    "Link",
+                                    help="Click to view ad preview",
+                                    display_text="🔗",
+                                    pinned="left"
+                                )
+                            },
+                            use_container_width=True,
+                            hide_index=True
+                        )
                     
                     st.markdown("---")
                     
@@ -4008,7 +4079,7 @@ def main():
                 }
                 
                 # Debug: Show final data
-                auto_hide_status_message(f"✅ Report generated successfully! {len(comprehensive_ads)} comprehensive ads created", "success")
+                auto_hide_status_message(f"Report generated successfully! {len(comprehensive_ads)} ads", "success")
                 
                 # Clear the loading message since data is now loaded
                 if 'loading_placeholder' in locals():
